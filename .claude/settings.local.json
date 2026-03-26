@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install:*)",
+      "Bash(npm run:*)",
+      "Bash(python main.py)",
+      "Bash(python -m uvicorn main:app --reload --port 8000)",
+      "Bash(curl:*)"
+    ]
+  }
+}
