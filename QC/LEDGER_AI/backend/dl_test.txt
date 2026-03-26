@@ -1,0 +1,50 @@
+Service role key set: YES
+
+Found 20 documents with storage-style file_path:
+  doc# 53 | 72fede0b-e1ae-4183-a785-86065edf4cc8/d6cb1ab400c4ed08c9e75990.pdf
+  doc# 52 | 72fede0b-e1ae-4183-a785-86065edf4cc8/d375c91e8726a1ab9369a844.pdf
+  doc# 50 | 72fede0b-e1ae-4183-a785-86065edf4cc8/341c5b7a9ff95130440ba78f.pdf
+  doc# 49 | 72fede0b-e1ae-4183-a785-86065edf4cc8/5149af0595ab1835d0290ad4.pdf
+  doc# 48 | 72fede0b-e1ae-4183-a785-86065edf4cc8/af83e7fe8f3b99fd34b3ad76.pdf
+  doc# 47 | 72fede0b-e1ae-4183-a785-86065edf4cc8/b5825d45722f8acbafcf3008.pdf
+  doc# 46 | 72fede0b-e1ae-4183-a785-86065edf4cc8/3c5870ba2ccf8d8f64168a2f.pdf
+  doc# 45 | 72fede0b-e1ae-4183-a785-86065edf4cc8/ca588dc6ef88ddccc8bd7c0a.pdf
+  doc# 44 | af9a6f8c-0ab8-4eed-8ab7-3d87ceb5106b/f53cfa05d434efce9e834b8e.pdf
+  doc# 43 | 72fede0b-e1ae-4183-a785-86065edf4cc8/3bccbd813a225e3ec3ed542f.pdf
+  doc# 42 | 72fede0b-e1ae-4183-a785-86065edf4cc8/74c88492d98764f79281bbc0.pdf
+  doc# 41 | 72fede0b-e1ae-4183-a785-86065edf4cc8/622308694846bb0572144260.pdf
+  doc# 40 | 72fede0b-e1ae-4183-a785-86065edf4cc8/5e19b30f165be410bc45ac5a.pdf
+  doc# 39 | 72fede0b-e1ae-4183-a785-86065edf4cc8/ef4b762028a70a44e839b586.pdf
+  doc# 38 | 72fede0b-e1ae-4183-a785-86065edf4cc8/e5adc89f9faa62b575912fdf.pdf
+  doc# 37 | 72fede0b-e1ae-4183-a785-86065edf4cc8/61e5fcac5ffd6d8b67720c01.pdf
+  doc# 35 | 95e7f5d5-d25a-474e-9e43-fe06f5285201/8beb8ec5ad6ea87bdd79be7f.pdf
+  doc# 34 | 79071f9f-5f3b-4c1a-9314-782d3e3b0a50/b856a188872b4ad8d6c2afe2.pdf
+  doc# 32 | 95e7f5d5-d25a-474e-9e43-fe06f5285201/6921949322dae5cbb4bab0ed.pdf
+  doc# 28 | b1c2eb2c-6024-4271-9cab-7fc91cf712ad/7e580c5efc838259f1d1f86e.pdf
+
+--- Testing downloads ---
+
+DocID=53 path=72fede0b-e1ae-4183-a785-86065edf4cc8/d6cb1ab400c4ed08c9e75990.pdf
+Attempting to download from bucket 'financial_document_uploads', path '72fede0b-e1ae-4183-a785-86065edf4cc8/d6cb1ab400c4ed08c9e75990.pdf'
+Downloaded via service role key: C:\Users\SHREE\AppData\Local\Temp\tmpiw4zyvk9.pdf
+  SUCCESS: C:\Users\SHREE\AppData\Local\Temp\tmpiw4zyvk9.pdf (63489 bytes)
+
+DocID=52 path=72fede0b-e1ae-4183-a785-86065edf4cc8/d375c91e8726a1ab9369a844.pdf
+Attempting to download from bucket 'financial_document_uploads', path '72fede0b-e1ae-4183-a785-86065edf4cc8/d375c91e8726a1ab9369a844.pdf'
+Downloaded via service role key: C:\Users\SHREE\AppData\Local\Temp\tmpq3em4c9y.pdf
+  SUCCESS: C:\Users\SHREE\AppData\Local\Temp\tmpq3em4c9y.pdf (63489 bytes)
+
+DocID=50 path=72fede0b-e1ae-4183-a785-86065edf4cc8/341c5b7a9ff95130440ba78f.pdf
+Attempting to download from bucket 'financial_document_uploads', path '72fede0b-e1ae-4183-a785-86065edf4cc8/341c5b7a9ff95130440ba78f.pdf'
+Downloaded via service role key: C:\Users\SHREE\AppData\Local\Temp\tmpyswjaeoq.pdf
+  SUCCESS: C:\Users\SHREE\AppData\Local\Temp\tmpyswjaeoq.pdf (63489 bytes)
+
+DocID=49 path=72fede0b-e1ae-4183-a785-86065edf4cc8/5149af0595ab1835d0290ad4.pdf
+Attempting to download from bucket 'financial_document_uploads', path '72fede0b-e1ae-4183-a785-86065edf4cc8/5149af0595ab1835d0290ad4.pdf'
+Downloaded via service role key: C:\Users\SHREE\AppData\Local\Temp\tmppddyyyns.pdf
+  SUCCESS: C:\Users\SHREE\AppData\Local\Temp\tmppddyyyns.pdf (59987 bytes)
+
+DocID=48 path=72fede0b-e1ae-4183-a785-86065edf4cc8/af83e7fe8f3b99fd34b3ad76.pdf
+Attempting to download from bucket 'financial_document_uploads', path '72fede0b-e1ae-4183-a785-86065edf4cc8/af83e7fe8f3b99fd34b3ad76.pdf'
+Downloaded via service role key: C:\Users\SHREE\AppData\Local\Temp\tmp0xkwqzel.pdf
+  SUCCESS: C:\Users\SHREE\AppData\Local\Temp\tmp0xkwqzel.pdf (63489 bytes)

@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls:*)",
+      "Bash(QUICK_START.txt:*)",
+      "Bash(grep -E \"\\(\\\\.md|\\\\.txt|\\\\.bat|\\\\.sh\\)$\")",
+      "Bash(python -c \"import fastapi, uvicorn, psycopg2; print\\(''✓ Core packages OK''\\)\")",
+      "Bash(python:*)",
+      "Bash(cat:*)"
+    ]
+  }
+}

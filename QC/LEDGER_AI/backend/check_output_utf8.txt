@@ -1,0 +1,89 @@
+﻿Key type: service_role
+FOLDERS IN BUCKET:
+  72fede0b-e1ae-4183-a785-86065edf4cc8/341c5b7a9ff95130440ba78f.pdf
+  72fede0b-e1ae-4183-a785-86065edf4cc8/3bccbd813a225e3ec3ed542f.pdf
+  72fede0b-e1ae-4183-a785-86065edf4cc8/3c5870ba2ccf8d8f64168a2f.pdf
+  72fede0b-e1ae-4183-a785-86065edf4cc8/5149af0595ab1835d0290ad4.pdf
+  72fede0b-e1ae-4183-a785-86065edf4cc8/5e19b30f165be410bc45ac5a.pdf
+  72fede0b-e1ae-4183-a785-86065edf4cc8/61e5fcac5ffd6d8b67720c01.pdf
+  72fede0b-e1ae-4183-a785-86065edf4cc8/622308694846bb0572144260.pdf
+  72fede0b-e1ae-4183-a785-86065edf4cc8/74c88492d98764f79281bbc0.pdf
+  72fede0b-e1ae-4183-a785-86065edf4cc8/8f9c47bd4d88f515ad4e9c91.pdf
+  72fede0b-e1ae-4183-a785-86065edf4cc8/af83e7fe8f3b99fd34b3ad76.pdf
+  72fede0b-e1ae-4183-a785-86065edf4cc8/b5825d45722f8acbafcf3008.pdf
+  72fede0b-e1ae-4183-a785-86065edf4cc8/ca588dc6ef88ddccc8bd7c0a.pdf
+  72fede0b-e1ae-4183-a785-86065edf4cc8/d375c91e8726a1ab9369a844.pdf
+  72fede0b-e1ae-4183-a785-86065edf4cc8/e5adc89f9faa62b575912fdf.pdf
+  72fede0b-e1ae-4183-a785-86065edf4cc8/ef4b762028a70a44e839b586.pdf
+  79071f9f-5f3b-4c1a-9314-782d3e3b0a50/b856a188872b4ad8d6c2afe2.pdf
+  95e7f5d5-d25a-474e-9e43-fe06f5285201/6921949322dae5cbb4bab0ed.pdf
+  95e7f5d5-d25a-474e-9e43-fe06f5285201/8beb8ec5ad6ea87bdd79be7f.pdf
+  af9a6f8c-0ab8-4eed-8ab7-3d87ceb5106b/f53cfa05d434efce9e834b8e.pdf
+  b1c2eb2c-6024-4271-9cab-7fc91cf712ad/7e580c5efc838259f1d1f86e.pdf
+  b4401c10-1c36-4550-ae52-e3fd3297e5bb/3fb5738fc44564c2acd3fe09.pdf
+  b4401c10-1c36-4550-ae52-e3fd3297e5bb/8be478322bde77879dd98961.pdf
+  b4401c10-1c36-4550-ae52-e3fd3297e5bb/97b33517898fd9dd7146d80e.pdf
+  b4401c10-1c36-4550-ae52-e3fd3297e5bb/97d911fe32a80c842e1d6282.pdf
+  b4401c10-1c36-4550-ae52-e3fd3297e5bb/ff4852d3114eb6ceaf956cd5.pdf
+
+Total bucket files: 25
+
+DB vs BUCKET comparison:
+  doc#  1 [LOCAL PATH  ] C:\LedgerAI\backend\uploads\b930a003ab2547e826b0f64a.pdf
+  doc#  2 [LOCAL PATH  ] /opt/render/project/src/backend/uploads/5f8b2950ba460b1b5563c7f0.pdf
+  doc#  3 [LOCAL PATH  ] /opt/render/project/src/backend/uploads/a46a753de9c02dc67ee5f06b.pdf
+  doc#  4 [NO PATH     ] 
+  doc#  5 [LOCAL PATH  ] /opt/render/project/src/backend/uploads/3b1a5b6e8b84745d6052796e.pdf
+  doc#  6 [LOCAL PATH  ] C:\LedgerAI\backend\uploads\bd184cb432d15e7bce365755.pdf
+  doc#  7 [LOCAL PATH  ] /opt/render/project/src/backend/uploads/6782969262044511fcb66754.pdf
+  doc#  8 [LOCAL PATH  ] /opt/render/project/src/backend/uploads/6e584c36310a6252e57ffca5.pdf
+  doc#  9 [LOCAL PATH  ] /opt/render/project/src/backend/uploads/40fa5044381e29698937018d.pdf
+  doc# 10 [OK          ] b4401c10-1c36-4550-ae52-e3fd3297e5bb/3fb5738fc44564c2acd3fe09.pdf
+  doc# 11 [NO PATH     ] 
+  doc# 12 [OK          ] b4401c10-1c36-4550-ae52-e3fd3297e5bb/ff4852d3114eb6ceaf956cd5.pdf
+  doc# 13 [NO PATH     ] 
+  doc# 14 [NO PATH     ] 
+  doc# 15 [NO PATH     ] 
+  doc# 16 [NO PATH     ] 
+  doc# 17 [OK          ] b4401c10-1c36-4550-ae52-e3fd3297e5bb/8be478322bde77879dd98961.pdf
+  doc# 18 [NO PATH     ] 
+  doc# 19 [NO PATH     ] 
+  doc# 20 [OK          ] b4401c10-1c36-4550-ae52-e3fd3297e5bb/97b33517898fd9dd7146d80e.pdf
+  doc# 21 [NO PATH     ] 
+  doc# 22 [OK          ] b4401c10-1c36-4550-ae52-e3fd3297e5bb/97d911fe32a80c842e1d6282.pdf
+  doc# 23 [OK          ] 72fede0b-e1ae-4183-a785-86065edf4cc8/8f9c47bd4d88f515ad4e9c91.pdf
+  doc# 24 [NO PATH     ] 
+  doc# 25 [NO PATH     ] 
+  doc# 26 [NO PATH     ] 
+  doc# 27 [NO PATH     ] 
+  doc# 28 [OK          ] b1c2eb2c-6024-4271-9cab-7fc91cf712ad/7e580c5efc838259f1d1f86e.pdf
+  doc# 29 [NO PATH     ] 
+  doc# 30 [NO PATH     ] 
+  doc# 31 [NO PATH     ] 
+  doc# 32 [OK          ] 95e7f5d5-d25a-474e-9e43-fe06f5285201/6921949322dae5cbb4bab0ed.pdf
+  doc# 34 [OK          ] 79071f9f-5f3b-4c1a-9314-782d3e3b0a50/b856a188872b4ad8d6c2afe2.pdf
+  doc# 35 [OK          ] 95e7f5d5-d25a-474e-9e43-fe06f5285201/8beb8ec5ad6ea87bdd79be7f.pdf
+  doc# 36 [NO PATH     ] 
+  doc# 37 [OK          ] 72fede0b-e1ae-4183-a785-86065edf4cc8/61e5fcac5ffd6d8b67720c01.pdf
+  doc# 38 [OK          ] 72fede0b-e1ae-4183-a785-86065edf4cc8/e5adc89f9faa62b575912fdf.pdf
+  doc# 39 [OK          ] 72fede0b-e1ae-4183-a785-86065edf4cc8/ef4b762028a70a44e839b586.pdf
+  doc# 40 [OK          ] 72fede0b-e1ae-4183-a785-86065edf4cc8/5e19b30f165be410bc45ac5a.pdf
+  doc# 41 [OK          ] 72fede0b-e1ae-4183-a785-86065edf4cc8/622308694846bb0572144260.pdf
+  doc# 42 [OK          ] 72fede0b-e1ae-4183-a785-86065edf4cc8/74c88492d98764f79281bbc0.pdf
+  doc# 43 [OK          ] 72fede0b-e1ae-4183-a785-86065edf4cc8/3bccbd813a225e3ec3ed542f.pdf
+  doc# 44 [OK          ] af9a6f8c-0ab8-4eed-8ab7-3d87ceb5106b/f53cfa05d434efce9e834b8e.pdf
+  doc# 45 [OK          ] 72fede0b-e1ae-4183-a785-86065edf4cc8/ca588dc6ef88ddccc8bd7c0a.pdf
+  doc# 46 [OK          ] 72fede0b-e1ae-4183-a785-86065edf4cc8/3c5870ba2ccf8d8f64168a2f.pdf
+  doc# 47 [OK          ] 72fede0b-e1ae-4183-a785-86065edf4cc8/b5825d45722f8acbafcf3008.pdf
+  doc# 48 [OK          ] 72fede0b-e1ae-4183-a785-86065edf4cc8/af83e7fe8f3b99fd34b3ad76.pdf
+  doc# 49 [OK          ] 72fede0b-e1ae-4183-a785-86065edf4cc8/5149af0595ab1835d0290ad4.pdf
+  doc# 50 [OK          ] 72fede0b-e1ae-4183-a785-86065edf4cc8/341c5b7a9ff95130440ba78f.pdf
+  doc# 51 [NO PATH     ] 
+  doc# 52 [OK          ] 72fede0b-e1ae-4183-a785-86065edf4cc8/d375c91e8726a1ab9369a844.pdf
+
+--- SUMMARY ---
+  OK (exists in bucket)  : 25
+  Local/stale paths      : 8
+  Missing from bucket    : 0
+  No path set            : 18
+  Total docs             : 51

@@ -1,0 +1,48 @@
+Checking recent documents for PDFs in storage...
+Attempting to download from bucket 'financial_document_uploads', path '72fede0b-e1ae-4183-a785-86065edf4cc8/ed2dee2bd3df5004f4707f0a.pdf'
+Downloaded via service role key: C:\Users\SHREE\AppData\Local\Temp\tmp9nvfufwa.pdf
+Document ID 54 -> SUCCESS! The PDF exists and can be viewed.
+Attempting to download from bucket 'financial_document_uploads', path '72fede0b-e1ae-4183-a785-86065edf4cc8/d6cb1ab400c4ed08c9e75990.pdf'
+Downloaded via service role key: C:\Users\SHREE\AppData\Local\Temp\tmpnwdna42s.pdf
+Document ID 53 -> SUCCESS! The PDF exists and can be viewed.
+Attempting to download from bucket 'financial_document_uploads', path '72fede0b-e1ae-4183-a785-86065edf4cc8/d375c91e8726a1ab9369a844.pdf'
+Downloaded via service role key: C:\Users\SHREE\AppData\Local\Temp\tmpl5iwaqed.pdf
+Document ID 52 -> SUCCESS! The PDF exists and can be viewed.
+Attempting to download from bucket 'financial_document_uploads', path '72fede0b-e1ae-4183-a785-86065edf4cc8/341c5b7a9ff95130440ba78f.pdf'
+Downloaded via service role key: C:\Users\SHREE\AppData\Local\Temp\tmpbtr_d6_e.pdf
+Document ID 50 -> SUCCESS! The PDF exists and can be viewed.
+Attempting to download from bucket 'financial_document_uploads', path '72fede0b-e1ae-4183-a785-86065edf4cc8/5149af0595ab1835d0290ad4.pdf'
+Downloaded via service role key: C:\Users\SHREE\AppData\Local\Temp\tmp5gljje2o.pdf
+Document ID 49 -> SUCCESS! The PDF exists and can be viewed.
+Attempting to download from bucket 'financial_document_uploads', path '72fede0b-e1ae-4183-a785-86065edf4cc8/af83e7fe8f3b99fd34b3ad76.pdf'
+Downloaded via service role key: C:\Users\SHREE\AppData\Local\Temp\tmp7bqungoj.pdf
+Document ID 48 -> SUCCESS! The PDF exists and can be viewed.
+Attempting to download from bucket 'financial_document_uploads', path '72fede0b-e1ae-4183-a785-86065edf4cc8/b5825d45722f8acbafcf3008.pdf'
+Downloaded via service role key: C:\Users\SHREE\AppData\Local\Temp\tmpgi6j_3wh.pdf
+Document ID 47 -> SUCCESS! The PDF exists and can be viewed.
+Attempting to download from bucket 'financial_document_uploads', path '72fede0b-e1ae-4183-a785-86065edf4cc8/3c5870ba2ccf8d8f64168a2f.pdf'
+Downloaded via service role key: C:\Users\SHREE\AppData\Local\Temp\tmp2xxjg45n.pdf
+Document ID 46 -> SUCCESS! The PDF exists and can be viewed.
+Attempting to download from bucket 'financial_document_uploads', path '72fede0b-e1ae-4183-a785-86065edf4cc8/ca588dc6ef88ddccc8bd7c0a.pdf'
+Downloaded via service role key: C:\Users\SHREE\AppData\Local\Temp\tmpiu0s4dqv.pdf
+Document ID 45 -> SUCCESS! The PDF exists and can be viewed.
+Attempting to download from bucket 'financial_document_uploads', path 'af9a6f8c-0ab8-4eed-8ab7-3d87ceb5106b/f53cfa05d434efce9e834b8e.pdf'
+Downloaded via service role key: C:\Users\SHREE\AppData\Local\Temp\tmp05_donkv.pdf
+Document ID 44 -> SUCCESS! The PDF exists and can be viewed.
+Attempting to download from bucket 'financial_document_uploads', path '72fede0b-e1ae-4183-a785-86065edf4cc8/3bccbd813a225e3ec3ed542f.pdf'
+Downloaded via service role key: C:\Users\SHREE\AppData\Local\Temp\tmpa7id5v0e.pdf
+Document ID 43 -> SUCCESS! The PDF exists and can be viewed.
+Attempting to download from bucket 'financial_document_uploads', path '72fede0b-e1ae-4183-a785-86065edf4cc8/74c88492d98764f79281bbc0.pdf'
+Downloaded via service role key: C:\Users\SHREE\AppData\Local\Temp\tmpgsww5iqu.pdf
+Document ID 42 -> SUCCESS! The PDF exists and can be viewed.
+Attempting to download from bucket 'financial_document_uploads', path '72fede0b-e1ae-4183-a785-86065edf4cc8/622308694846bb0572144260.pdf'
+Downloaded via service role key: C:\Users\SHREE\AppData\Local\Temp\tmpj61t2qhx.pdf
+Document ID 41 -> SUCCESS! The PDF exists and can be viewed.
+Attempting to download from bucket 'financial_document_uploads', path '72fede0b-e1ae-4183-a785-86065edf4cc8/5e19b30f165be410bc45ac5a.pdf'
+Downloaded via service role key: C:\Users\SHREE\AppData\Local\Temp\tmpig9oaaod.pdf
+Document ID 40 -> SUCCESS! The PDF exists and can be viewed.
+Attempting to download from bucket 'financial_document_uploads', path '72fede0b-e1ae-4183-a785-86065edf4cc8/ef4b762028a70a44e839b586.pdf'
+Downloaded via service role key: C:\Users\SHREE\AppData\Local\Temp\tmp7yari__x.pdf
+Document ID 39 -> SUCCESS! The PDF exists and can be viewed.
+
+CONCLUSION: Some documents have PDFs! Click the SUCCESS document IDs in your panel to see them.

@@ -1,0 +1,171 @@
+# from services.pdf_service import extract_pages
+# from services.identifier_service import (
+#     reduce_text,
+#     find_existing_identifier,
+#     classify_document_llm,
+#     save_new_statement_format
+# )
+# from services.extraction_service import (
+#     generate_extraction_logic_llm,
+#     extract_transactions_using_logic
+# )
+# from repository.document_repo import (
+#     get_document,
+#     get_document_password,
+#     update_processing_start,
+#     update_document_status,
+#     insert_audit,
+#     insert_text_extraction,
+#     update_document_statement,
+#     update_statement_status,
+#     update_processing_complete,
+#     insert_staging_transactions
+# )
+# from services.account_match_service import (
+#     extract_account_identity,
+#     match_account,
+#     log_account_match
+# )
+# from services.llm_parser import parse_with_llm
+# from services.validation_service import validate_transactions, extract_json_from_response
+# from repository.statement_category_repo import activate_statement_category
+# from db.connection import get_connection
+# import json
+ 
+ 
+# def process_document(document_id):
+ 
+#     # -------------------------------------------------
+#     # FETCH DOCUMENT
+#     # -------------------------------------------------
+#     doc = get_document(document_id)
+#     file_path = doc["file_path"]
+#     user_id = doc["user_id"]
+#     password = get_document_password(document_id)
+ 
+#     # -------------------------------------------------
+#     # START PROCESSING
+#     # -------------------------------------------------
+#     update_processing_start(document_id)
+#     insert_audit(document_id, "PROCESSING")
+ 
+#     # -------------------------------------------------
+#     # TEXT EXTRACTION
+#     # -------------------------------------------------
+#     pages = extract_pages(file_path, password)
+#     full_text = "\n".join(pages)
+#     reduced = reduce_text(pages)
+#     update_document_status(document_id, "IDENTIFYING_FORMAT")
+#     insert_text_extraction(document_id, full_text)
+#     # -------------------------------------------------
+#     # IDENTIFICATION
+#     # -------------------------------------------------
+#     matched, existing = find_existing_identifier(full_text)
+#     # update_status(document_id, "PARSING_TRANSACTIONS")
+#     update_document_status(document_id, "PARSING_TRANSACTIONS")
+ 
+#     if matched:
+#         identity_json = existing["statement_identifier"]
+#         extraction_code = existing["extraction_logic"]
+#         statement_id = existing["statement_id"]
+#         statement_status = existing.get("status")
+#         update_document_statement(document_id,statement_id)
+#         if statement_status == "ACTIVE":
+#             code_txns = extract_transactions_using_logic(full_text,extraction_code)
+#             final_parser_type = "CODE"
+#             update_processing_complete(document_id,final_parser_type)
+#             insert_staging_transactions(document_id=document_id,
+#                                         user_id=user_id,
+#                                         code_txns=code_txns,
+#                                         llm_txns=[],
+#                                         code_confidence=100,
+#                                         llm_confidence=0)
+#             update_document_status(document_id,"AWAITING_REVIEW")
+#             insert_audit(document_id,"COMPLETED")
+#     else:
+#         identity_json = classify_document_llm(reduced)
+#         extraction_code = generate_extraction_logic_llm(
+#             identifier_json=identity_json,
+#             text_sample=full_text[:2500]
+#         )
+#         statement_id=save_new_statement_format(
+#             format_name=identity_json["id"],
+#             bank_code=None,
+#             identifier_json=identity_json,
+#             extraction_logic=extraction_code
+#         )
+#     update_document_statement(document_id, statement_id)
+ 
+#     # -------------------------------------------------
+#     # ACCOUNT MATCHING (NON-BLOCKING)
+#     # -------------------------------------------------
+ 
+#     identity_data = extract_account_identity(identity_json, full_text)
+ 
+#     account_id, match_confidence = match_account(user_id, identity_data)
+ 
+#     conn = get_connection()
+#     cursor = conn.cursor()
+ 
+#     if not account_id:
+   
+#         log_account_match(document_id,user_id,identity_data,None,0,"FAILED")
+ 
+#         cursor.execute("""
+#             UPDATE documents
+#             SET account_id=NULL,
+#                 account_match_confidence=NULL
+#             WHERE document_id=%s
+#         """, (document_id,))
+ 
+#     else:
+   
+#         cursor.execute("""
+#             UPDATE documents
+#             SET account_id=%s,
+#                 account_match_confidence=%s
+#             WHERE document_id=%s
+#         """, (account_id, match_confidence, document_id))
+ 
+#         log_account_match(document_id,user_id,identity_data,account_id,match_confidence,"AUTO_ASSIGNED")
+ 
+#     conn.commit()
+#     cursor.close()
+#     conn.close()
+ 
+#     code_txns = extract_transactions_using_logic(full_text, extraction_code)
+#     llm_response = parse_with_llm(full_text, identity_json)
+#     llm_txns = extract_json_from_response(llm_response)
+ 
+#     metrics = validate_transactions(code_txns, llm_txns)
+#     comparison_score = metrics.get("overall_accuracy", 0) if metrics else 0
+#     code_confidence = round(
+#         sum(t.get("confidence", 0) for t in code_txns) / len(code_txns),
+#         2
+#     ) if code_txns else 0
+#     llm_confidence = round(
+#        sum(t.get("confidence", 0) for t in llm_txns) / len(llm_txns),
+#        2
+#     ) if llm_txns else 0
+#     if comparison_score >= 90:
+#         final_parser_type = "CODE"
+#         new_statement_status = "ACTIVE"
+#     else:
+#         final_parser_type = "LLM"
+#         new_statement_status = "EXPERIMENTAL"
+#     update_statement_status(statement_id, new_statement_status)
+#     update_processing_complete(document_id, final_parser_type)
+   
+#     # -------------------------------------------------
+#     # INSERT STAGING
+#     # -------------------------------------------------
+#     insert_staging_transactions(
+#         document_id=document_id,
+#         user_id=user_id,
+#         code_txns=code_txns,
+#         llm_txns=llm_txns,
+#         code_confidence=code_confidence,
+#         llm_confidence=llm_confidence
+#     )
+#     update_document_status(document_id, "AWAITING_REVIEW")
+#     insert_audit(document_id, "COMPLETED")

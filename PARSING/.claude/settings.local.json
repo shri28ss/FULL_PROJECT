@@ -1,0 +1,42 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(chmod:*)",
+      "Bash(grep -E '\\\\.\\(sh|md\\)$')",
+      "Bash(cd:*)",
+      "Bash(./verify-setup.sh)",
+      "Bash(./help.sh)",
+      "Bash(for f:*)",
+      "Bash(do test:*)",
+      "Bash(echo \"  ✓ $f\")",
+      "Bash(echo \"  ✗ $f MISSING\")",
+      "Bash(done)",
+      "Bash(cat:*)",
+      "Bash(npm --version)",
+      "Bash(python3 -m venv .venv)",
+      "Bash(source .venv/bin/activate)",
+      "Bash(pip install:*)",
+      "Bash(pip list:*)",
+      "Bash(npm install:*)",
+      "Bash(npm audit:*)",
+      "Bash(python3.12 --version)",
+      "Bash(python3.11 --version)",
+      "Bash(python3.12 -m venv .venv)",
+      "Read(//run/media/kaifmomin/iDrive/LedgerAI parser/**)",
+      "Bash(ls -lh *.md *.sh)",
+      "Bash(source backend/.venv/bin/activate)",
+      "Bash(deactivate)",
+      "Bash(ls -1 *.md *.sh)",
+      "Bash(while read:*)",
+      "Bash(do echo:*)",
+      "Bash(pip freeze:*)",
+      "Bash(mkdir -p prompts_backup)",
+      "Bash(cp -r prompts/*.py prompts_backup/)",
+      "Bash(wc -l *.py)",
+      "Bash(python -c \":*)",
+      "Bash(curl -s \"https://generativelanguage.googleapis.com/v1beta/models?key=$GEMINI_API_KEY\")",
+      "Bash(python3 -m json.tool)",
+      "Bash(python3:*)"
+    ]
+  }
+}

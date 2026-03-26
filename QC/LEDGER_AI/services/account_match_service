@@ -1,0 +1,125 @@
+# from db.connection import get_connection
+# import re
+ 
+ 
+# def extract_account_identity(identity_json: dict, full_text: str):
+#     """
+#     Extract account number last4, IFSC, card last4, loan account, wallet id from document.
+#     """
+ 
+#     markers = identity_json.get("identity_markers", {})
+#     entity = markers.get("entity_identity", {})
+#     issuer = markers.get("issuer_identity", {}).get("regulatory_identifiers", {})
+ 
+#     result = {
+#         "institution_name": identity_json.get("institution_name"),
+#         "account_last4": None,
+#         "card_last4": None,
+#         "loan_account_no": None,
+#         "wallet_id": None,
+#         "ifsc": None
+#     }
+ 
+#     def extract_by_regex(pattern):
+#         if not pattern:
+#             return None
+#         match = re.search(pattern, full_text)
+#         if match:
+#             return match.group(0)
+#         return None
+ 
+#     # Account number
+#     acc_pattern = entity.get("account_number", {}).get("pattern")
+#     acc = extract_by_regex(acc_pattern)
+#     if acc:
+#         result["account_last4"] = acc[-4:]
+ 
+#     # Card number
+#     card_pattern = entity.get("masked_card_number", {}).get("pattern")
+#     card = extract_by_regex(card_pattern)
+#     if card:
+#         result["card_last4"] = card[-4:]
+ 
+#     # Loan account
+#     loan_pattern = entity.get("loan_account_number", {}).get("pattern")
+#     loan = extract_by_regex(loan_pattern)
+#     if loan:
+#         result["loan_account_no"] = loan
+ 
+#     # Wallet ID
+#     wallet_pattern = entity.get("wallet_id", {}).get("pattern")
+#     wallet = extract_by_regex(wallet_pattern)
+#     if wallet:
+#         result["wallet_id"] = wallet
+ 
+#     # IFSC
+#     ifsc_pattern = issuer.get("ifsc", {}).get("pattern")
+#     if ifsc_pattern:
+#         match = re.search(ifsc_pattern, full_text)
+#         if match:
+#             result["ifsc"] = match.group(0)
+ 
+#     return result
+ 
+ 
+# def match_account(user_id: int, identity_data: dict):
+ 
+#     conn = get_connection()
+#     cursor = conn.cursor(dictionary=True)
+ 
+#     cursor.execute("""
+#         SELECT ai.account_id, ai.confidence_score
+#         FROM account_identifiers ai
+#         JOIN accounts a ON ai.account_id = a.account_id
+#         WHERE ai.user_id=%s
+#         AND ai.is_active=1
+#         AND (
+#             ai.account_number_last4=%s OR
+#             ai.card_last4=%s OR
+#             ai.loan_account_no=%s OR
+#             ai.wallet_id=%s
+#         )
+#         LIMIT 1
+#     """, (
+#         user_id,
+#         identity_data.get("account_last4"),
+#         identity_data.get("card_last4"),
+#         identity_data.get("loan_account_no"),
+#         identity_data.get("wallet_id")
+#     ))
+ 
+#     match = cursor.fetchone()
+ 
+#     cursor.close()
+#     conn.close()
+ 
+#     if match:
+#         return match["account_id"], match["confidence_score"]
+ 
+#     return None, 0
+ 
+# def log_account_match(document_id, user_id, identity_data, account_id, confidence, status):
+ 
+#     conn = get_connection()
+#     cursor = conn.cursor()
+ 
+#     cursor.execute("""
+#         INSERT INTO document_account_match_log
+#         (document_id, user_id, detected_institution,
+#          detected_account_last4, matched_account_id,
+#          confidence_score, match_status)
+#         VALUES (%s,%s,%s,%s,%s,%s,%s)
+#     """, (
+#         document_id,
+#         user_id,
+#         identity_data.get("institution_name"),
+#         identity_data.get("account_last4"),
+#         account_id,
+#         confidence,
+#         status
+#     ))
+ 
+#     conn.commit()
+#     cursor.close()
+#     conn.close()
+ 

@@ -1,0 +1,65 @@
+╔══════════════════════════════════════════════════════════════╗
+║                  LEDGER AI - QUICK START                     ║
+╚══════════════════════════════════════════════════════════════╝
+
+🚀 START THE APPLICATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Windows:
+  Double-click:  start.bat
+
+Linux/Mac:
+  Run:  ./start.sh
+
+Manual:
+  Terminal 1:  cd backend && .\venv\Scripts\activate && uvicorn backend:app --reload
+  Terminal 2:  cd frontend && npm run dev
+
+
+🌐 ACCESS URLS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Frontend:     http://localhost:5173
+Backend API:  http://localhost:8000
+API Docs:     http://localhost:8000/docs
+
+
+✅ ENVIRONMENT STATUS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✓ Python 3.13.5 with all dependencies
+✓ Node.js v24.14.0 with React 19
+✓ Database configured (Supabase PostgreSQL)
+✓ API keys configured in backend/.env
+✓ 11 sample bank PDFs ready for testing
+
+
+📚 DOCUMENTATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+README.md                - Project overview
+SETUP_GUIDE.md          - Installation instructions
+ENVIRONMENT_STATUS.md   - Configuration checklist
+ENVIRONMENT_COMPLETE.md - Full setup report
+
+
+🧪 QUICK TEST
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+After starting:
+1. Open http://localhost:5173
+2. Navigate to "Review Documents"
+3. Upload a PDF from backend/statement_pdf/
+4. Watch AI extract transactions!
+
+
+⚠️  IMPORTANT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+• Keep both terminal windows open while using the app
+• First startup may take 10-15 seconds
+• Frontend will auto-open in browser (usually)
+• Backend logs appear in the Backend terminal
+
+
+🎯 READY TO RUN - Last verified: 2026-03-20 10:17 UTC
