@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import { Check, Code, FileSearch, Building2, Cpu, Loader2, ChevronLeft, CheckCircle, Download, Link } from "lucide-react";
-import API from "../../../../../PARSING/frontend/src/api/api";
+import API from "../api/api";
 
 export default function ReviewPage() {
     const [searchParams] = useSearchParams();
@@ -83,7 +83,40 @@ export default function ReviewPage() {
     const handleDownloadJson = async () => {
         try {
             const res = await API.get(`/documents/${documentId}/download-json`);
-            const jsonStr = JSON.stringify(res.data, null, 2);
+            const raw = res.data;
+
+            // Resolve identifier: use the linked account's number digits, fallback to document_id
+            const linkedAccount = userAccounts.find(a => a.account_id === selectedAccountId);
+            const accountNumber =
+                linkedAccount?.account_number ||
+                linkedAccount?.account_number_last4 ||
+                linkedAccount?.card_last4 ||
+                String(documentId);
+
+            // API returns: { file_name, parser_type, transaction_count, transactions: [...] }
+            // transactions[] items use "date" (current parser) or "txn_date" (legacy)
+            const rawTxns = Array.isArray(raw)
+                ? raw                        // bare array (unlikely but safe)
+                : Array.isArray(raw.transactions)
+                    ? raw.transactions       // ← normal path: { transactions: [...] }
+                    : [];
+
+            const normalizedTransactions = rawTxns.map(tx => ({
+                txn_date:   tx.txn_date  ?? tx.date        ?? null,
+                debit:      tx.debit     != null ? tx.debit  : 0,
+                credit:     tx.credit    != null ? tx.credit : 0,
+                balance:    tx.balance   != null ? tx.balance : 0,
+                details:    tx.details   || tx.description  || "",
+                confidence: tx.confidence ?? null,
+            }));
+
+            const output = {
+                file_name:    raw.file_name || `${(data?.bank_name || "bank").replace(/\s+/g, "_").toLowerCase()}_primary_ml.pdf`,
+                identifiers:  [String(accountNumber)],
+                transactions: normalizedTransactions,
+            };
+
+            const jsonStr = JSON.stringify(output, null, 2);
             const blob = new Blob([jsonStr], { type: "application/json" });
             const url = URL.createObjectURL(blob);
             const a = document.createElement("a");

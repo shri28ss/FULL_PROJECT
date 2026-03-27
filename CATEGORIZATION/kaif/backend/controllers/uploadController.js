@@ -82,17 +82,20 @@ async function bulkUploadStatements(req, res) {
     }
 
     // 4. Prepare uncategorized transaction records with matching staging IDs
-    const uncatInserts = stagingData.map((stage, index) => ({
-      user_id: userId,
-      account_id: accountId,
-      document_id: doc.document_id,
-      staging_transaction_id: stage.staging_transaction_id,
-      txn_date: transactions[index].txn_date,
-      debit: transactions[index].debit || 0,
-      credit: transactions[index].credit || 0,
-      balance: transactions[index].balance || 0,
-      details: transactions[index].details
-    }));
+    const uncatInserts = stagingData.map((stage, index) => {
+      const txn = transactions[index];
+      return {
+        user_id: userId,
+        account_id: accountId,
+        document_id: doc.document_id,
+        staging_transaction_id: stage.staging_transaction_id,
+        txn_date: txn.txn_date || txn.date,
+        debit: parseFloat(txn.debit) || 0,
+        credit: parseFloat(txn.credit) || 0,
+        balance: parseFloat(txn.balance) || 0,
+        details: txn.details
+      };
+    });
 
     // Insert all uncategorized records atomically
     const { error: uncatError } = await supabase

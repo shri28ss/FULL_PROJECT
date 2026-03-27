@@ -4,7 +4,7 @@ import {
     FileUp, CheckCircle, Loader2, AlertCircle, Search, Cpu, List, Lock,
     FileText, Clock, ChevronDown, Table as TableIcon, Trash2
 } from "lucide-react";
-import API from "../../../../../PARSING/frontend/src/api/api";
+import API from "../api/api";
 import { useNavigate } from "react-router-dom";
 
 export default function ParsingPage() {
