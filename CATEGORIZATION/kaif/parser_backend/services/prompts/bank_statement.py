@@ -7,131 +7,85 @@ def build_prompt(identifier_json: dict, text_sample: str) -> str:
     Reduced from ~3500 to ~800 tokens while maintaining quality.
     """
 
-    # ── Extract key fields from identifier_json ──────────────────────
-    doc_family   = identifier_json.get("document_family", "BANK_ACCOUNT_STATEMENT")
-    doc_subtype  = identifier_json.get("document_subtype", "")
-    institution  = identifier_json.get("institution_name", "")
-    table_headers = (identifier_json.get("identity_markers", {}).get("transaction_table_identity", {}).get("table_header_markers", []))
+    institution = identifier_json.get("institution_name", "Unknown")
+    doc_family = identifier_json.get("document_family", "BANK_ACCOUNT_STATEMENT")
+
+    # Get parsing hints to provide context
+    hints = identifier_json.get("parsing_hints", {})
+    layout = hints.get("layout_type", "SINGLE_COLUMN")
+    skip_labels = hints.get("summary_section_labels", [])
+    boundary_signals = hints.get("transaction_boundary_signals", ["DATE"])
+    ref_pattern = hints.get("ref_no_pattern")
+
+    skip_instruction = ""
+    if skip_labels:
+        skip_instruction = f"\n- Skip lines starting with: {', '.join(skip_labels[:10])}"
+
+    ref_instruction = ""
+    if ref_pattern:
+        ref_instruction = f"\n- Strip reference numbers matching: {ref_pattern}"
 
     return f"""
-You are analyzing a bank statement to understand its structure and create a robust Python extraction function.
+Write extract_transactions(text: str) -> list for {institution} {doc_family} documents.
 
-════════════════════════════════════════════
-DOCUMENT METADATA
-════════════════════════════════════════════
-
-Document Family: {doc_family}
-Document Subtype: {doc_subtype}
-Institution: {institution}
-Detected Headers: {', '.join(table_headers) if table_headers else 'None'}
-
-════════════════════════════════════════════
-SAMPLE TEXT (First ~30000 characters)
-════════════════════════════════════════════
-
+SAMPLE FROM ONE DOCUMENT (your code must work for ALL similar documents, not just this one):
 {text_sample}
 
-════════════════════════════════════════════
-YOUR TASK
-════════════════════════════════════════════
+PARSING CONTEXT:
+- Layout: {layout}
+- Institution: {institution}{skip_instruction}{ref_instruction}
+- Transaction boundaries: {', '.join(boundary_signals)}
 
-Analyze the sample text above and identify:
+CRITICAL: Your code must be ROBUST and handle variations:
+- Different transaction descriptions and formats
+- Varying amounts of whitespace and alignment
+- Extra text, noise, or formatting differences between statements
+- Different page breaks or section separators
+- Use the sample to understand the PATTERN, not to hardcode specific text
 
-1. **Transaction Block Location**
-   - Where do transactions start in the document?
-   - What markers/patterns indicate the beginning of transaction data?
-   - Where do transactions end?
+APPROACH:
+1. Find transaction lines (have date + amounts, not headers/footers/summaries)
+2. Handle multi-line transactions CAREFULLY:
+   - Only merge if the next line is clearly a continuation (no date, no amount, indented or very short)
+   - DO NOT merge if next line looks like a separate transaction or has amounts
+   - DO NOT merge lines separated by page breaks or section dividers
+   - DO NOT merge noise lines (page numbers, headers, footers, random text)
+   - When in doubt, treat as separate transactions rather than merging
+   - Use PATTERN MATCHING (regex, keywords) not exact string matching
+3. Extract details field AS-IS:
+   - Keep ALL prefixes (UPI-, IMPS-, NEFT-, RTGS-, ACHD-, etc.)
+   - Keep reference numbers and transaction IDs
+   - Preserve the raw text exactly as it appears in the statement
+   - Do NOT clean, strip, or modify the details string
+4. Classify debit vs credit (CRITICAL - use ALL methods):
+   a) Column position: if statement has Debit/Credit or Withdrawal/Deposit columns
+   b) Balance change: compare current vs previous balance
+      - Balance DECREASED = debit (money out)
+      - Balance INCREASED = credit (money in)
+   c) Keywords in details:
+      - Credit: PAYMENT, REFUND, CREDIT, REVERSAL, DEPOSIT, INTEREST EARNED
+      - Debit: PURCHASE, WITHDRAWAL, FEE, CHARGE, TRANSFER OUT
+5. Extract fields:
+   - Date: normalize to YYYY-MM-DD (handle 2-digit years: 00-30→2000s, 31-99→1900s)
+   - Amounts: handle Indian format (1,00,000.00), strip currency symbols
+   - Balance: rightmost amount or calculate from previous
 
-2. **Date Pattern Recognition**
-   - What date format is used? (DD/MM/YYYY, MM-DD-YYYY, DD-MMM-YY, etc.)
-   - Are dates in a fixed column position or variable?
-   - How to reliably extract transaction dates?
+OUTPUT FORMAT:
+[{{"date": "YYYY-MM-DD", "details": str, "debit": float|None, "credit": float|None, "balance": float|None, "confidence": float}}]
 
-3. **Column Structure**
-   - Which columns exist in the transaction table?
-   - What is the order of columns?
-   - Are transactions single-line or multi-line entries?
-   - How are description details spread across lines?
+RULES:
+- Write GENERIC code using patterns (regex, keywords), NOT hardcoded strings
+- Exactly one of debit/credit per transaction (never both, never neither)
+- If unsure about debit/credit, use balance change as tie-breaker
+- Deduplicate on (date, details, debit, credit)
+- Skip: headers, footers, summaries (Opening/Closing Balance, Total Debit/Credit), page numbers, noise
+- Filter out lines that don't match transaction patterns (no date or no amount = not a transaction)
+- Confidence: 0.95 normal, 0.85 if debit/credit unclear, 0.70 if amount/date uncertain
+- Raw Python only, no markdown
+- Only use built-in types (dict, list, str, float, int, bool, None)
+- Do NOT import typing, Optional, List, Dict - use lowercase dict, list instead
+- Available imports: re, datetime, date, timedelta (already imported, just use them)
+- Only import re if needed for regex operations
 
-4. **Debit/Credit Identification**
-   - How to distinguish debit vs credit amounts?
-   - Are there separate columns, or symbols (-, +, Dr, Cr)?
-   - Are debits in parentheses or marked differently?
-
-5. **Balance Column**
-   - Which column represents running balance?
-   - Is it always present for each transaction?
-
-6. **Multi-line Transaction Handling**
-   - Do transaction descriptions span multiple lines?
-   - How to detect continuation lines vs new transactions?
-   - What patterns separate one transaction from the next?
-
-════════════════════════════════════════════
-OUTPUT REQUIREMENTS
-════════════════════════════════════════════
-
-Provide a complete, production-ready Python function with this EXACT signature:
-```python
-def extract_transactions(full_text: str) -> list[dict]:
-    \"\"\"
-    Extract transactions from bank statement text.
-    
-    Args:
-        full_text: Complete extracted text from PDF
-        
-    Returns:
-        List of transaction dictionaries in the format:
-        [
-          {{
-            "date": "YYYY-MM-DD",
-            "details": "<transaction description only, no dates/amounts/noise>",
-            "debit": <float or null>,
-            "credit": <float or null>,
-            "balance": <float or null>,
-            "confidence": <0.0 to 1.0>
-          }}
-        ]
-    \"\"\"
-    import re
-    from datetime import datetime
-    
-    # Your implementation here
-    pass
-```
-
-════════════════════════════════════════════
-CODE REQUIREMENTS
-════════════════════════════════════════════
-
-✓ Use ONLY standard library (re, datetime, etc.) - no external dependencies
-✓ Make the code generalizable to work with similar statement formats
-✓ DO NOT hardcode specific values like account numbers or names
-✓ Use pattern matching and structure detection, not exact text matching
-✓ Handle edge cases: missing balances, multi-line descriptions, special characters
-✓ Assign confidence scores:
-  - 1.0: Clean extraction with all fields present
-  - 0.8-0.9: Minor issues (missing balance, partial data)
-  - 0.5-0.7: Ambiguous parsing or incomplete information
-  - <0.5: Low confidence extraction
-✓ Clean the "details" field: remove dates, amounts, extra whitespace
-✓ Convert dates to YYYY-MM-DD format
-✓ Return empty list if no transactions found
-✓ Include helpful inline comments explaining the logic
-
-════════════════════════════════════════════
-EXPECTED OUTPUT FORMAT
-════════════════════════════════════════════
-
-First, provide a brief analysis (2-3 paragraphs) explaining:
-- The statement structure you identified
-- Date format and column layout
-- How debit/credit/balance are distinguished
-- Any quirks or special handling needed
-
-Then provide the complete Python function.
-
-Begin your analysis now.
+Write the function now.
 """
-
-
