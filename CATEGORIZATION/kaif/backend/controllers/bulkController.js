@@ -417,7 +417,7 @@ async function processUpload(req, res) {
           review_status: 'PENDING',
           uncategorized_transaction_id: item.uncategorized_transaction_id || null,
           extracted_id: item.extracted_id || null,
-          is_uncategorised: isUncategorised
+          is_uncategorised: item.is_contra ? false : isUncategorised
         };
       });
 

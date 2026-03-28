@@ -160,22 +160,56 @@ async function findAndLinkContras(transactionsBatch, userId, supabaseClient) {
                 txn.categorised_by = 'GLOBAL_RULE';
                 txn.confidence_score = 1.00;
 
-                // Retroactively update the mirror transaction that was already written
-                const { error: updateError } = await supabaseClient
+                // Retroactively update the mirror transaction that was already written.
+                // First, fetch its current posting_status so we know if ledger entries exist.
+                const { data: mirrorTxn, error: mirrorFetchError } = await supabaseClient
                     .from('transactions')
-                    .update({
-                        is_contra: true,
-                        categorised_by: 'GLOBAL_RULE',
-                        offset_account_id: txn.account_id || txn.base_account_id,
-                        attention_level: 'LOW',
-                        review_status: 'PENDING'
-                    })
-                    .eq('transaction_id', dbMatch[0].transaction_id);
+                    .select('transaction_id, posting_status, review_status')
+                    .eq('transaction_id', dbMatch[0].transaction_id)
+                    .single();
 
-                if (updateError) {
-                    console.error('❌ Failed to retroactively update mirror contra transaction:', updateError);
+                if (mirrorFetchError) {
+                    console.error('❌ Failed to fetch mirror transaction for contra update:', mirrorFetchError);
                 } else {
-                    console.log(`✅ Contra linked: updated mirror transaction_id ${dbMatch[0].transaction_id}`);
+                    const wasPosted = mirrorTxn?.posting_status === 'POSTED';
+
+                    if (wasPosted) {
+                        // The mirror was already approved & had ledger entries written.
+                        // Those entries recorded a real income/expense — wrong for a contra.
+                        // Delete them first so the books stay clean.
+                        const { error: ledgerDeleteError } = await supabaseClient
+                            .from('ledger_entries')
+                            .delete()
+                            .eq('transaction_id', dbMatch[0].transaction_id);
+
+                        if (ledgerDeleteError) {
+                            console.error('❌ Failed to delete stale ledger entries for contra mirror:', ledgerDeleteError);
+                        } else {
+                            console.warn(`⚠️  Contra Radar: deleted stale ledger entries for already-posted transaction_id ${dbMatch[0].transaction_id}. Transaction reset to PENDING for user review.`);
+                        }
+                    }
+
+                    // Now update the mirror transaction:
+                    //   - Mark it contra so no new ledger entries are ever created for it
+                    //   - Reset to PENDING / DRAFT so the user is aware it changed
+                    const { error: updateError } = await supabaseClient
+                        .from('transactions')
+                        .update({
+                            is_contra: true,
+                            is_uncategorised: false, // contra is always categorised — it routes to the mirror account
+                            categorised_by: 'GLOBAL_RULE',
+                            offset_account_id: txn.account_id || txn.base_account_id,
+                            attention_level: 'LOW',
+                            review_status: 'PENDING',
+                            ...(wasPosted && { posting_status: 'DRAFT' }) // revert POSTED → DRAFT if ledger was cleaned
+                        })
+                        .eq('transaction_id', dbMatch[0].transaction_id);
+
+                    if (updateError) {
+                        console.error('❌ Failed to retroactively update mirror contra transaction:', updateError);
+                    } else {
+                        console.log(`✅ Contra linked: updated mirror transaction_id ${dbMatch[0].transaction_id}${wasPosted ? ' (ledger entries removed, reset to DRAFT/PENDING)' : ''}`);
+                    }
                 }
             }
         }

@@ -15,8 +15,13 @@ const rulesEngineService = require('../services/rulesEngineService');
  *   - CREDIT the offset account (income goes up)
  */
 async function createLedgerEntries(transactionId, baseAccountId, offsetAccountId, amount, transactionType, transactionDate, isContra, userId) {
-  if (isContra) {
-    console.log(`⏭️  Skipping ledger entries for contra txn ${transactionId}`);
+  // Contra transactions represent internal transfers between two bank accounts.
+  // Both legs (DEBIT side A, CREDIT side B) are stored as separate transactions,
+  // but they describe the same money movement. To avoid double-counting in the
+  // ledger, we only write entries for the DEBIT leg (money leaving the source
+  // account). The CREDIT leg is the mirror and would produce identical entries.
+  if (isContra && transactionType === 'CREDIT') {
+    console.log(`⏭️  Skipping ledger entries for contra CREDIT leg (mirror) txn ${transactionId}`);
     return;
   }
 
