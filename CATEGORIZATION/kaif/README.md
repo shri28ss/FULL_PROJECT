@@ -43,7 +43,7 @@ npm run dev
 ```bash
 cd ml-service
 python -m venv .venv
-.venv\Scripts\activate  # Windows
+.venv\Scripts\activate 
 pip install -r requirements.txt
 python -m spacy download en_core_web_sm
 python main.py

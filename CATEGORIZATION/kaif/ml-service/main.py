@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from sentence_transformers import SentenceTransformer
 import uvicorn
 
-from logger import get_logger
+from app_logger import get_logger
 
 logger = get_logger("ml-service")
 
