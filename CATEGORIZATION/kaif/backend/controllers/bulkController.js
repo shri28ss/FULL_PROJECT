@@ -138,9 +138,15 @@ async function processUpload(req, res) {
 
           // Keyword Rescue: Before dumping, attempt to extract a meaningful trailing keyword.
           // Many UPI transactions end in a human-readable note (e.g. "...N-172819246581-BREAKFAST").
-          // Pattern mirrors Rule 1 (-([A-Z]{4,})$) to catch those exact cases.
-          // If found, redirect to the VECTOR_SEARCH pipeline instead of dumping.
-          const trailingKeywordMatch = txn.details.match(/-([A-Z]{4,})$/i);
+          // Trim first — PDF parsing can leave trailing spaces that break the $ anchor.
+          const trimmedDetails = txn.details.trim();
+          const trailingKeywordMatch = trimmedDetails.match(/-([A-Z]{4,})$/i)
+            // Fallback: some parsers split words across lines e.g. "CREA M" → rejoin last two tokens
+            || (() => {
+              const lastDashPart = trimmedDetails.split('-').pop()?.trim().replace(/\s+/g, '');
+              return lastDashPart && lastDashPart.length >= 4 ? [null, lastDashPart] : null;
+            })();
+
           if (trailingKeywordMatch) {
             const rescuedKeyword = trailingKeywordMatch[1].toUpperCase();
             logger.info('Trapdoor RESCUED by trailing keyword', {
