@@ -9,19 +9,9 @@ ENV HOME=/home/user \
 
 WORKDIR $HOME/app
 
-# Install system deps needed by spaCy (as root briefly)
-USER root
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
-USER user
-
 # Install Python dependencies
 COPY --chown=user requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-
-# Pre-download spaCy model into image
-RUN python -m spacy download en_core_web_sm
 
 # Pre-cache SentenceTransformers model into image
 RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"

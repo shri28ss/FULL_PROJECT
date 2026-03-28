@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import UploadModal from '../UploadModal';
 import AccountPickerModal from '../AccountPickerModal';
 import { Toast, useToast } from '../Toast';
@@ -8,6 +8,61 @@ import '../../styles/Transactions.css';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000';
 const ATTENTION_ORDER = ['HIGH', 'MEDIUM', 'LOW'];
+
+// Small inline editor that appears when the amount cell is clicked
+const AmountEditor = ({ txn, onSave, onCancel }) => {
+  const isDebit = txn.debit > 0;
+  const [editAmount, setEditAmount] = useState(isDebit ? txn.debit : txn.credit);
+  const [editType, setEditType] = useState(isDebit ? 'DEBIT' : 'CREDIT');
+  const [saving, setSaving] = useState(false);
+  const inputRef = useRef(null);
+
+  useEffect(() => { inputRef.current?.focus(); inputRef.current?.select(); }, []);
+
+  const handleSave = async () => {
+    const parsed = parseFloat(editAmount);
+    if (isNaN(parsed) || parsed <= 0) return;
+    setSaving(true);
+    await onSave(txn.uncategorized_transaction_id, parsed, editType);
+    setSaving(false);
+  };
+
+  const handleKey = (e) => {
+    if (e.key === 'Enter') handleSave();
+    if (e.key === 'Escape') onCancel();
+  };
+
+  return (
+    <div className="amount-editor" onClick={(e) => e.stopPropagation()}>
+      <div className="amount-editor-type-toggle">
+        <button
+          className={`type-btn ${editType === 'DEBIT' ? 'active debit' : ''}`}
+          onClick={() => setEditType('DEBIT')}
+        >− Dr</button>
+        <button
+          className={`type-btn ${editType === 'CREDIT' ? 'active credit' : ''}`}
+          onClick={() => setEditType('CREDIT')}
+        >+ Cr</button>
+      </div>
+      <input
+        ref={inputRef}
+        className="amount-editor-input"
+        type="number"
+        step="0.01"
+        min="0.01"
+        value={editAmount}
+        onChange={(e) => setEditAmount(e.target.value)}
+        onKeyDown={handleKey}
+      />
+      <div className="amount-editor-actions">
+        <button className="amount-editor-save" onClick={handleSave} disabled={saving}>
+          {saving ? '...' : '✓'}
+        </button>
+        <button className="amount-editor-cancel" onClick={onCancel}>✕</button>
+      </div>
+    </div>
+  );
+};
 
 const Transactions = () => {
   const { toasts, showToast } = useToast();
@@ -21,6 +76,7 @@ const Transactions = () => {
   const [manualTarget, setManualTarget] = useState(null);
   const [approvingIds, setApprovingIds] = useState(new Set());
   const [selectedIds, setSelectedIds] = useState(new Set());
+  const [correctingId, setCorrectingId] = useState(null); // uncategorized_transaction_id being edited
 
   const fetchTransactions = async (currentFilter = activeFilter) => {
     setLoading(true);
@@ -64,8 +120,6 @@ const Transactions = () => {
           const isCategorised = txn.transactions && txn.transactions.length > 0;
           if (isCategorised && txn.transactions[0].review_status === 'PENDING') {
             const isUncategorised = txn.transactions[0].is_uncategorised;
-
-            // Only auto-select LOW attention that are NOT uncategorised
             if (txn.transactions[0].attention_level === 'LOW' && !isUncategorised) {
               lowAttentionIds.add(txn.transactions[0].transaction_id);
             }
@@ -116,12 +170,10 @@ const Transactions = () => {
   };
 
   const handleApprove = async (transactionId, isUncategorised) => {
-    // Client-side check for uncategorised accounts
     if (isUncategorised) {
       showToast('Cannot approve: transaction uses uncategorised account. Please assign a category first.', 'error');
       return;
     }
-
     setApprovingIds((prev) => new Set(prev).add(transactionId));
     try {
       const { data: { session } } = await supabase.auth.getSession();
@@ -169,16 +221,13 @@ const Transactions = () => {
 
       if (response.ok) {
         if (data.blocked_count && data.blocked_count > 0) {
-          // Partial success - some approved, some blocked
           showToast(`${data.approved_count} transactions approved. ${data.blocked_count} transactions require categorisation.`, 'warning');
         } else {
-          // Full success
           showToast(`${data.approved_count} transactions approved`, 'success');
         }
         setSelectedIds(new Set());
         fetchTransactions(activeFilter);
       } else {
-        // Handle error response
         if (data.blocked_transaction_ids && data.blocked_transaction_ids.length > 0) {
           const blockedCount = data.blocked_transaction_ids.length;
           showToast(`Cannot approve: ${blockedCount} transactions are uncategorised.`, 'error');
@@ -248,6 +297,38 @@ const Transactions = () => {
     }
   };
 
+  // Correct amount/type — clicking on the amount cell triggers this
+  const handleCorrect = async (uncategorizedTransactionId, amount, transaction_type) => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const response = await fetch(
+        `${API_BASE_URL}/api/transactions/${uncategorizedTransactionId}/correct`,
+        {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session?.access_token || ''}`
+          },
+          body: JSON.stringify({ amount, transaction_type })
+        }
+      );
+      const data = await response.json();
+      if (response.ok) {
+        showToast('Amount corrected. Transaction reset to pending.', 'success');
+        setCorrectingId(null);
+        fetchTransactions(activeFilter);
+      } else if (response.status === 403) {
+        showToast(data.error, 'error');
+        setCorrectingId(null);
+      } else {
+        showToast(data.error || 'Failed to correct transaction', 'error');
+      }
+    } catch (err) {
+      console.error('Correct failed:', err);
+      showToast('Failed to correct transaction', 'error');
+    }
+  };
+
   const filteredTransactions = transactions.filter((txn) => {
     const isCategorised = txn.transactions && txn.transactions.length > 0;
     if (activeFilter === 'PENDING_CAT') return !isCategorised;
@@ -258,28 +339,19 @@ const Transactions = () => {
   const handleFilterChange = (newFilter) => {
     setActiveFilter(newFilter);
     fetchTransactions(newFilter);
-    // Clear selections when changing filters away from PENDING_APP
     if (newFilter !== 'PENDING_APP') {
       setSelectedIds(new Set());
     }
   };
 
-  // Group transactions by attention level for PENDING_APP view
   const getGroupedTransactions = () => {
     if (activeFilter !== 'PENDING_APP') return null;
-    
     const grouped = {};
-    ATTENTION_ORDER.forEach((level) => {
-      grouped[level] = [];
-    });
-
+    ATTENTION_ORDER.forEach((level) => { grouped[level] = []; });
     filteredTransactions.forEach((txn) => {
       const level = txn.transactions[0].attention_level || 'LOW';
-      if (grouped[level]) {
-        grouped[level].push(txn);
-      }
+      if (grouped[level]) grouped[level].push(txn);
     });
-
     return ATTENTION_ORDER.map((level) => ({
       level,
       transactions: grouped[level]
@@ -290,24 +362,16 @@ const Transactions = () => {
     const txnsInLevel = filteredTransactions.filter(
       (txn) => txn.transactions[0].attention_level === level
     );
-
-    // Exclude uncategorised transactions from selection
-    const selectableTxns = txnsInLevel.filter((txn) => {
-      return !txn.transactions[0].is_uncategorised;
-    });
-
+    const selectableTxns = txnsInLevel.filter((txn) => !txn.transactions[0].is_uncategorised);
     const idsInLevel = new Set(selectableTxns.map((txn) => txn.transactions[0].transaction_id));
     const allSelected = selectableTxns.every((txn) =>
       selectedIds.has(txn.transactions[0].transaction_id)
     );
-
     if (allSelected) {
-      // Deselect all in this group
       const newSelected = new Set(selectedIds);
       idsInLevel.forEach((id) => newSelected.delete(id));
       setSelectedIds(newSelected);
     } else {
-      // Select all in this group
       setSelectedIds(new Set([...selectedIds, ...idsInLevel]));
     }
   };
@@ -316,14 +380,36 @@ const Transactions = () => {
     const txnsInLevel = filteredTransactions.filter(
       (txn) => txn.transactions[0].attention_level === level
     );
-
-    // Exclude uncategorised transactions
-    const selectableTxns = txnsInLevel.filter((txn) => {
-      return !txn.transactions[0].is_uncategorised;
-    });
-
+    const selectableTxns = txnsInLevel.filter((txn) => !txn.transactions[0].is_uncategorised);
     return selectableTxns.length > 0 && selectableTxns.every((txn) =>
       selectedIds.has(txn.transactions[0].transaction_id)
+    );
+  };
+
+  // Renders the amount cell. Clicking opens the inline AmountEditor.
+  const renderAmountCell = (txn) => {
+    const isDebit = txn.debit > 0;
+    const amount = isDebit ? txn.debit : txn.credit;
+
+    if (correctingId === txn.uncategorized_transaction_id) {
+      return (
+        <AmountEditor
+          txn={txn}
+          onSave={handleCorrect}
+          onCancel={() => setCorrectingId(null)}
+        />
+      );
+    }
+
+    return (
+      <div
+        className={`amount-cell-clickable ${isDebit ? 'debit-cell' : 'credit-cell'}`}
+        title="Click to correct amount or type"
+        onClick={() => setCorrectingId(txn.uncategorized_transaction_id)}
+      >
+        {isDebit ? `- ₹${amount}` : `+ ₹${amount}`}
+        <span className="amount-edit-hint">✎</span>
+      </div>
     );
   };
 
@@ -365,27 +451,20 @@ const Transactions = () => {
         <button
           className={`filter-tab ${activeFilter === 'ALL' ? 'active' : ''}`}
           onClick={() => handleFilterChange('ALL')}
-        >
-          All
-        </button>
+        >All</button>
         <button
           className={`filter-tab ${activeFilter === 'PENDING_CAT' ? 'active' : ''}`}
           onClick={() => handleFilterChange('PENDING_CAT')}
-        >
-          Pending Categorisation
-        </button>
+        >Pending Categorisation</button>
         <button
           className={`filter-tab ${activeFilter === 'PENDING_APP' ? 'active' : ''}`}
           onClick={() => handleFilterChange('PENDING_APP')}
-        >
-          Pending Approval
-        </button>
+        >Pending Approval</button>
       </div>
 
       <div className="transactions-content">
         <div className="placeholder-table">
           {activeFilter === 'PENDING_APP' ? (
-            // Grouped view with checkboxes
             <>
               {loading ? (
                 <div className="empty-state" style={{ padding: '40px' }}>
@@ -412,8 +491,6 @@ const Transactions = () => {
                       </div>
                       {group.transactions.map((txn) => {
                         const isChecked = selectedIds.has(txn.transactions[0].transaction_id);
-                        const isDebit = txn.debit > 0;
-                        const amount = isDebit ? txn.debit : txn.credit;
                         const accountName = txn.transactions[0].accounts
                           ? txn.transactions[0].accounts.account_name
                           : '-';
@@ -440,16 +517,10 @@ const Transactions = () => {
                             </div>
                             <div>{new Date(txn.txn_date).toLocaleDateString()}</div>
                             <div className="details-cell">{txn.details}</div>
-                            <div className={isDebit ? 'debit-cell' : 'credit-cell'}>
-                              {isDebit ? `- ₹${amount}` : `+ ₹${amount}`}
-                            </div>
+                            {renderAmountCell(txn)}
                             <div
                               className={txn.transactions[0].accounts ? 'account-cell-clickable' : ''}
-                              onClick={() => {
-                                if (txn.transactions[0].accounts) {
-                                  setRecatTarget(txn);
-                                }
-                              }}
+                              onClick={() => { if (txn.transactions[0].accounts) setRecatTarget(txn); }}
                               style={{ cursor: txn.transactions[0].accounts ? 'pointer' : 'default' }}
                             >
                               {accountName}
@@ -473,7 +544,6 @@ const Transactions = () => {
               )}
             </>
           ) : (
-            // Flat view without checkboxes
             <>
               <div
                 className="table-header"
@@ -524,8 +594,6 @@ const Transactions = () => {
                       : '-';
                     const categorisedBy = isCategorised ? txn.transactions[0].categorised_by : '-';
                     const isUncategorised = isCategorised ? txn.transactions[0].is_uncategorised : false;
-                    const isDebit = txn.debit > 0;
-                    const amount = isDebit ? txn.debit : txn.credit;
 
                     return (
                       <div
@@ -539,9 +607,7 @@ const Transactions = () => {
                       >
                         <div>{new Date(txn.txn_date).toLocaleDateString()}</div>
                         <div className="details-cell">{txn.details}</div>
-                        <div className={isDebit ? 'debit-cell' : 'credit-cell'}>
-                          {isDebit ? `- ₹${amount}` : `+ ₹${amount}`}
-                        </div>
+                        {renderAmountCell(txn)}
                         <div
                           className={
                             isCategorised && txn.transactions[0].accounts
@@ -559,9 +625,7 @@ const Transactions = () => {
                           }}
                           style={{
                             cursor:
-                              isCategorised && txn.transactions[0].accounts
-                                ? 'pointer'
-                                : !isCategorised
+                              (isCategorised && txn.transactions[0].accounts) || !isCategorised
                                 ? 'pointer'
                                 : 'default'
                           }}

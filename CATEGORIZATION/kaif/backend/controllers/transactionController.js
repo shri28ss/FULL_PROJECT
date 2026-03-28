@@ -421,26 +421,9 @@ async function manualCategorizeTransaction(req, res) {
         console.log(`💾 Storing garbage in exact cache: "${rawDetails.trim()}"`);
         await upsertExactCache(userId, rawDetails.trim(), newTxn.offset_account_id);
       } else {
-        // For vector cache, try to get cleaned name from NER first
-        let cleanName = rawDetails;
-        if (!rulesResult.hasRuleMatch) {
-          try {
-            const ML_SERVICE_URL = process.env.ML_SERVICE_URL || `http://127.0.0.1:${process.env.PYTHON_PORT || 5000}`;
-            const sanitizedString = rawDetails.replace(/[^a-zA-Z0-9\s]/g, ' ');
-            const nerResponse = await fetch(`${ML_SERVICE_URL}/ner`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ text: sanitizedString })
-            });
-            if (nerResponse.ok) {
-              const nerData = await nerResponse.json();
-              cleanName = nerData.merchant_name || sanitizedString;
-            }
-          } catch (err) {
-            console.error(`NER failure for manual categorize [${rawDetails}]:`, err.message);
-          }
-        }
-        // Store cleaned name in vector cache for semantic matching
+        // Store the raw details (or clean_merchant_name) directly in vector cache
+        // NER has been removed — Regex Cleaner in the bulk pipeline handles cleaning
+        const cleanName = rawDetails;
         console.log(`💾 Storing in vector cache: "${cleanName}" for transaction: "${rawDetails}"`);
         await upsertVectorCache(userId, cleanName, newTxn.offset_account_id);
       }
@@ -453,9 +436,144 @@ async function manualCategorizeTransaction(req, res) {
   }
 }
 
+/**
+ * correctTransaction(req, res)
+ * Corrects the amount and/or transaction_type (DEBIT/CREDIT) of a parsed transaction.
+ *
+ * Strategy: Clean Slate
+ *   1. Guard against POSTED and contra transactions.
+ *   2. Delete ledger_entries (FK must go first).
+ *   3. Delete the transactions row.
+ *   4. Update uncategorized_transactions with corrected values and reset to PENDING.
+ *
+ * The transaction will reappear in the uncategorized queue for re-categorization.
+ */
+async function correctTransaction(req, res) {
+  try {
+    const { uncategorized_transaction_id } = req.params;
+    const { amount, transaction_type } = req.body;
+    const userId = req.user?.id;
+
+    if (!userId) {
+      return res.status(401).json({ error: 'User authentication failed.' });
+    }
+
+    // Input validation
+    if (!uncategorized_transaction_id) {
+      return res.status(400).json({ error: 'Missing uncategorized_transaction_id.' });
+    }
+    if (amount === undefined && transaction_type === undefined) {
+      return res.status(400).json({ error: 'At least one of amount or transaction_type must be provided.' });
+    }
+    if (amount !== undefined && (isNaN(amount) || Number(amount) <= 0)) {
+      return res.status(400).json({ error: 'Amount must be a positive number.' });
+    }
+    if (transaction_type !== undefined && !['DEBIT', 'CREDIT'].includes(transaction_type)) {
+      return res.status(400).json({ error: 'transaction_type must be DEBIT or CREDIT.' });
+    }
+
+    // ── 1. Fetch the existing transactions row ─────────────────────────────────
+    const { data: existingTxn, error: fetchError } = await supabase
+      .from('transactions')
+      .select('transaction_id, posting_status, is_contra, amount, transaction_type')
+      .eq('uncategorized_transaction_id', uncategorized_transaction_id)
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    if (fetchError) {
+      console.error('correctTransaction fetch error:', fetchError);
+      return res.status(500).json({ error: 'Failed to fetch transaction.' });
+    }
+
+    if (existingTxn) {
+      // Guard: Block edits on POSTED transactions
+      if (existingTxn.posting_status === 'POSTED') {
+        return res.status(403).json({
+          error: 'Cannot correct a POSTED transaction. Posted entries are locked. Please raise a manual reversal.'
+        });
+      }
+
+      // Guard: Block edits on contra-paired transactions
+      if (existingTxn.is_contra) {
+        return res.status(403).json({
+          error: 'Cannot correct a contra-paired transaction. Edit both legs manually.'
+        });
+      }
+
+      // ── 2. Delete ledger_entries first (FK constraint) ──────────────────────
+      const { error: ledgerDeleteError } = await supabase
+        .from('ledger_entries')
+        .delete()
+        .eq('transaction_id', existingTxn.transaction_id);
+
+      if (ledgerDeleteError) {
+        console.error('correctTransaction ledger delete error:', ledgerDeleteError);
+        return res.status(500).json({ error: 'Failed to remove ledger entries.' });
+      }
+
+      // ── 3. Delete the transactions row ─────────────────────────────────────
+      const { error: txnDeleteError } = await supabase
+        .from('transactions')
+        .delete()
+        .eq('transaction_id', existingTxn.transaction_id)
+        .eq('user_id', userId);
+
+      if (txnDeleteError) {
+        console.error('correctTransaction txn delete error:', txnDeleteError);
+        return res.status(500).json({ error: 'Failed to remove transaction.' });
+      }
+    }
+    // If no transactions row exists yet (still PENDING), we still correct the source.
+
+    // ── 4. Build the corrected uncategorized_transaction update ───────────────
+    const finalType = transaction_type || existingTxn?.transaction_type;
+    const finalAmount = amount !== undefined ? parseFloat(Number(amount).toFixed(2)) : (existingTxn?.amount);
+
+    const uncatUpdate = {
+      status: 'PENDING'
+    };
+
+    if (finalType === 'DEBIT') {
+      uncatUpdate.debit = finalAmount;
+      uncatUpdate.credit = null;
+    } else {
+      uncatUpdate.credit = finalAmount;
+      uncatUpdate.debit = null;
+    }
+
+    const { error: uncatUpdateError } = await supabase
+      .from('uncategorized_transactions')
+      .update(uncatUpdate)
+      .eq('uncategorized_transaction_id', uncategorized_transaction_id)
+      .eq('user_id', userId);
+
+    if (uncatUpdateError) {
+      console.error('correctTransaction uncategorized update error:', uncatUpdateError);
+      return res.status(500).json({ error: 'Failed to update source transaction.' });
+    }
+
+    console.log(`✅ Transaction corrected: uncategorized_transaction_id=${uncategorized_transaction_id}, type=${finalType}, amount=${finalAmount}`);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Transaction corrected and reset to PENDING. Please re-categorize.',
+      corrected: {
+        uncategorized_transaction_id,
+        transaction_type: finalType,
+        amount: finalAmount
+      }
+    });
+
+  } catch (err) {
+    console.error('Unexpected error in correctTransaction:', err);
+    return res.status(500).json({ error: 'Internal server error.' });
+  }
+}
+
 module.exports = {
   recategorizeTransaction,
   approveTransaction,
   bulkApproveTransactions,
-  manualCategorizeTransaction
+  manualCategorizeTransaction,
+  correctTransaction
 };

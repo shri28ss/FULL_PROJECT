@@ -25,8 +25,8 @@ async function categorizeBatch(uncategorizedArray, availableCategories) {
 
     logger.info('Using LLM provider', providerInfo);
 
-    // Split into smaller batches to avoid context overflow
-    const BATCH_SIZE = 20;
+    // Batch size of 25 is reliable with the 32K output token limit on Gemini 2.5 Flash
+    const BATCH_SIZE = 25;
     const allResults = [];
     let successfulBatches = 0;
     let failedBatches = 0;
@@ -109,8 +109,7 @@ ${JSON.stringify(batch.map(t => ({
   transaction_id: t.uncategorized_transaction_id || t.transaction_id,
   details: t.clean_merchant_name || t.details,
   amount: t.debit || t.credit || 0,
-  type: t.debit ? 'DEBIT' : 'CREDIT',
-  date: t.txn_date
+  type: t.debit ? 'DEBIT' : 'CREDIT'
 })), null, 2)}
 `;
 

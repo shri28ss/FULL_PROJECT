@@ -55,7 +55,7 @@ const PROVIDERS = {
           ],
           generationConfig: {
             temperature: temperature,
-            maxOutputTokens: 8192
+            maxOutputTokens: 32768
           }
         };
       }

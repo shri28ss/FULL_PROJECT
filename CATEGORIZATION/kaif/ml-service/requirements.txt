@@ -1,4 +1,3 @@
 fastapi
 uvicorn
-spacy
 sentence-transformers

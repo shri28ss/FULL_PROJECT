@@ -117,18 +117,53 @@ async function processUpload(req, res) {
           // If template lookup failed, fall through to next stages
         }
         else if (rulesResult.strategy === 'EXACT_THEN_DUMP') {
-          const categoryAccountId = await getAccountIdFromTemplate(rulesResult.targetTemplateId, userId, supabase);
+          // Check personal exact cache first before throwing it away
+          const searchKey = rulesResult.extractedId || txn.details;
+          const personalMatch = await personalCacheService.checkExactMatch(userId, searchKey);
+          
+          if (personalMatch) {
+            logger.info('Exact cache HIT before dump', { searchKey });
+            finalResults.push({
+              ...txn,
+              base_account_id: sourceAccountId,
+              offset_account_id: personalMatch.offset_account_id,
+              clean_merchant_name: searchKey.toUpperCase(),
+              categorised_by: 'PERSONAL_EXACT',
+              confidence_score: 1.00,
+              extracted_id: rulesResult.extractedId || null,
+              attention_level: 'LOW'
+            });
+            continue;
+          }
 
-          // EXACT_THEN_DUMP allows null (for garbage transactions)
-          finalResults.push({
-            ...txn,
-            base_account_id: sourceAccountId,
-            offset_account_id: categoryAccountId || null,
-            categorised_by: 'TRAPDOOR_FILTER',
-            confidence_score: 1.00,
-            attention_level: 'LOW'
-          });
-          continue;
+          // Keyword Rescue: Before dumping, attempt to extract a meaningful trailing keyword.
+          // Many UPI transactions end in a human-readable note (e.g. "...N-172819246581-BREAKFAST").
+          // Pattern mirrors Rule 1 (-([A-Z]{4,})$) to catch those exact cases.
+          // If found, redirect to the VECTOR_SEARCH pipeline instead of dumping.
+          const trailingKeywordMatch = txn.details.match(/-([A-Z]{4,})$/i);
+          if (trailingKeywordMatch) {
+            const rescuedKeyword = trailingKeywordMatch[1].toUpperCase();
+            logger.info('Trapdoor RESCUED by trailing keyword', {
+              details: txn.details.slice(0, 60),
+              keyword: rescuedKeyword
+            });
+            cleanMerchantName = rescuedKeyword;
+            // Fall through to Stage 2 (Regex Cleaner) and Stage 3 (Vector)
+          } else {
+            const categoryAccountId = await getAccountIdFromTemplate(rulesResult.targetTemplateId, userId, supabase);
+            const fallbackAccountId = txn.debit ? uncategorisedExpenseId : uncategorisedIncomeId;
+
+            // Dump: no useful signal found
+            finalResults.push({
+              ...txn,
+              base_account_id: sourceAccountId,
+              offset_account_id: categoryAccountId || fallbackAccountId,
+              categorised_by: 'TRAPDOOR_FILTER',
+              confidence_score: 1.00,
+              attention_level: 'LOW'
+            });
+            continue;
+          }
         }
         else if (rulesResult.strategy === 'VECTOR_SEARCH') {
           cleanMerchantName = rulesResult.extractedId || txn.details;
@@ -160,25 +195,30 @@ async function processUpload(req, res) {
       }
 
       // ==========================================
-      // STAGE 2: PYTHON NER
+      // STAGE 2: REGEX CLEANER (Replaces Python NER)
       // ==========================================
-      // Run NER if no rule match OR if VECTOR_SEARCH strategy (to get clean merchant name)
-      if (!rulesResult.hasRuleMatch || rulesResult.strategy === 'VECTOR_SEARCH') {
-        try {
-          const sanitizedString = txn.details.replace(/[^a-zA-Z0-9\s]/g, ' ');
-          const nerResponse = await fetch(`${ML_SERVICE_URL}/ner`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text: sanitizedString })
-          });
-          if (nerResponse.ok) {
-            const nerData = await nerResponse.json();
-            cleanMerchantName = nerData.merchant_name || sanitizedString;
-          }
-        } catch (err) {
-          logger.error('NER failure', { details: txn.details, error: err.message });
-        }
-      }
+      let textToClean = rulesResult.extractedId || txn.details;
+
+      // 1. Safely remove VPA Suffixes using the '@' anchor before special characters are stripped
+      const vpaRegex = /@(okicici|okaxis|ybl|okhdfcbank|upi|paytm|oksbi|sbi|axl|ibl|icici)\b/gi;
+      textToClean = textToClean.replace(vpaRegex, ' ');
+
+      // 2. Strip non-alphanumeric characters (keeps letters, numbers, and spaces)
+      textToClean = textToClean.replace(/[^a-zA-Z0-9\s]/g, ' ');
+
+      // 3. Remove long, useless numbers (4 or more digits like transaction IDs or dates)
+      textToClean = textToClean.replace(/\b\d{4,}\b/g, ' ');
+
+      // 4. Remove Banking/Payment Jargon
+      const noiseWords = ['UPI', 'IMPS', 'NEFT', 'RTGS', 'TXN', 'POS', 'ECOM', 'REF', 'ATM', 'TRANSFER'];
+      const noiseRegex = new RegExp(`\\b(${noiseWords.join('|')})\\b`, 'gi');
+      textToClean = textToClean.replace(noiseRegex, ' ');
+
+      // 5. Compress extra spaces introduced by our replacements
+      textToClean = textToClean.replace(/\s+/g, ' ').trim();
+
+      // Final result passed to Vector Similarity
+      cleanMerchantName = textToClean || 'UNKNOWN';
 
       // ==========================================
       // STAGE 3: VECTOR SIMILARITY
