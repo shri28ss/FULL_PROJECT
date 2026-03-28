@@ -12,9 +12,6 @@ import sys, os
 import logging
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
-import jwt
-
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from config import SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY
@@ -90,26 +87,33 @@ def login_user(email: str, password: str) -> dict:
 
 
 # ── Token verification — live Supabase call ───────────────────
-
-from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
-import jwt
-
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
+# Mirrors the categorization backend's authMiddleware.js:
+#   supabase.auth.getUser(token)
+# A live network call to Supabase (~100-200ms) that correctly
+# rejects expired, revoked, and forged tokens.
 
 def get_current_user(token: str = Depends(oauth2_scheme)) -> dict:
+    """
+    Validate a Supabase JWT by calling the Supabase Auth API.
+    Returns {"user_id": str} on success, raises HTTP 401 on failure.
+    """
     try:
-        # Decode Supabase JWT (no verification for now)
-        payload = jwt.decode(token, options={"verify_signature": False})
+        client = _get_service_client()
+        response = client.auth.get_user(token)
 
-        user_id = payload.get("sub")
-        if not user_id:
-            raise Exception("Invalid token")
+        if response is None or response.user is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or expired token",
+            )
 
-        return {"user_id": user_id}
+        return {"user_id": str(response.user.id)}
 
-    except Exception:
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning("get_current_user failed: %s: %s", type(e).__name__, e)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token",
+            detail="Authentication failed",
         )

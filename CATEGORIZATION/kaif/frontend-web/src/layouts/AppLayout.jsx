@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Outlet } from 'react-router-dom';
 import Sidebar from '../components/Sidebar';
-// import Settings from '../pages/Settings';               // ← ADD (fixes Issue #4 too)
+import Settings from '../components/pages/Settings';
 import { signOut } from '../shared/authService';
 import '../styles/Dashboard.css';
 
