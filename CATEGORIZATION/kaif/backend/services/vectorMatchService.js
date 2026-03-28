@@ -73,14 +73,9 @@ async function findVectorMatch(cleanString, userId, transactionType) {
     } else if (keywordRules && keywordRules.length > 0) {
       for (const rule of keywordRules) {
         const keyword = rule.keyword.toUpperCase();
-
-        // For CONTAINS: require a word boundary at the LEFT of the keyword.
-        // Prevents e.g. "OLA" matching "CHOCOLATE" or "UBER" matching "JUBERSHABBIRSHAIKH"
-        // while still correctly matching "OLA CABS", "UBER RIDE", "EGGS" (EGG\b not needed).
-        const escapedKeyword = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const isMatch = rule.match_type === 'EXACT'
           ? uppercaseString === keyword
-          : new RegExp(`\\b${escapedKeyword}`).test(uppercaseString);
+          : uppercaseString.includes(keyword);
 
         if (!isMatch) continue;
 
