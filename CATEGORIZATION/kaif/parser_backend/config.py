@@ -18,12 +18,6 @@ CLASSIFIER_MODEL = os.environ.get("CLASSIFIER_MODEL", "gemini-3.1-flash-lite-pre
 LLM_PARSER_MODEL = os.environ.get("LLM_PARSER_MODEL", "gemini-3.1-flash-lite-preview")
 
 
-# OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-# OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-# # FIX: Use os.getenv to allow overriding, and fix the default model ID (dot instead of hyphen)
-# OPENROUTER_MODEL_NAME = "anthropic/claude-4.6-sonnet"
-# DEFAULT_MAX_TOKENS = 4096
-
 # ── Code Generation LLM (Claude/OpenRouter/9router) ──────────
 # Provider: "anthropic", "openrouter", or "9router"
 CODE_GEN_PROVIDER = os.environ.get("CODE_GEN_PROVIDER", "anthropic")
