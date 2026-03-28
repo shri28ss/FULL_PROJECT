@@ -16,9 +16,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Pre-cache SentenceTransformers model into image
 RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
 
-# Copy source
+# Copy source — include app_logger.py!
 COPY --chown=user main.py .
-
+COPY --chown=user app_logger.py .     
 EXPOSE 7860
 
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7860"]
