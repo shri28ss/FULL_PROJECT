@@ -11,10 +11,10 @@ import json
 import logging
 
 from google import genai
-from config import OPENROUTER_API_KEY, LLM_PARSER_MODEL
+from config import GEMINI_API_KEY, LLM_PARSER_MODEL
 from services.llm_retry import call_with_retry
 
-client = genai.Client(api_key=OPENROUTER_API_KEY)
+client = genai.Client(api_key=GEMINI_API_KEY)
 logger = logging.getLogger("ledgerai.llm_parser")
 
 

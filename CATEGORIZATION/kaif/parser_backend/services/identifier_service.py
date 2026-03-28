@@ -4,14 +4,14 @@ import logging
 from typing import Dict, List, Optional
 
 from google import genai
-from config import OPENROUTER_API_KEY, CLASSIFIER_MODEL
+from config import GEMINI_API_KEY, CLASSIFIER_MODEL
 from services.llm_retry import call_with_retry
 from repository.statement_category_repo import (
     get_all_matchable_formats,
     insert_statement_category,
 )
 
-client = genai.Client(api_key=OPENROUTER_API_KEY)
+client = genai.Client(api_key=GEMINI_API_KEY)
 logger = logging.getLogger("ledgerai.identifier_service")
 
 
