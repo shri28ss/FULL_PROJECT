@@ -231,12 +231,19 @@ def extract_transactions_using_logic(
 
 def _strip_markdown(content: str) -> str:
     """
-    Extract Python code from LLM output, preserving imports.
-    Handles markdown fences, prose before imports, and bare function output.
+    Extract only the Python function from LLM output.
+
+    Handles three output shapes:
+      1. Wrapped in ```python ... ``` fences
+      2. Step 1 analysis prose followed by bare function (two-step prompt output)
+      3. Bare function only (old prompt style)
+
+    In all cases returns only the text starting from
+    'def extract_transactions' to end of output.
     """
     raw = content.strip()
 
-    # Case 1 — markdown fences: pull the block containing the function
+    # Case 1 — markdown fences present: pull the block containing the function
     if "```" in raw:
         parts = raw.split("```")
         for part in parts:
@@ -246,18 +253,15 @@ def _strip_markdown(content: str) -> str:
                     raw = raw[6:].strip()
                 break
 
-    # Case 2 — prose before the code block (Step 1 analysis etc.)
-    # Find the first import or the function def, whichever comes first
-    import_idx = raw.find("import ")
-    fn_idx = raw.find("def extract_transactions")
-
-    if import_idx != -1 and (fn_idx == -1 or import_idx < fn_idx):
-        # Imports exist and appear before the function — start from imports
-        raw = raw[import_idx:]
-    elif fn_idx > 0:
-        # No imports found but prose exists before function — strip prose only
-        raw = raw[fn_idx:]
-    elif fn_idx == -1:
+    # Cases 2 & 3 — find where the function starts and discard everything before it
+    # This handles Step 1 prose sitting above the function
+    fn_marker = "def extract_transactions"
+    idx = raw.find(fn_marker)
+    if idx > 0:
+        # Content before function (Step 1 analysis) — strip it
+        raw = raw[idx:]
+    elif idx == -1:
+        # Function not found — return as-is and let exec() raise a clear error
         logger.warning("_strip_markdown: 'def extract_transactions' not found in LLM output.")
 
     return raw.strip()

@@ -13,6 +13,7 @@ from repository.document_repo import (
     update_document_status,
     insert_audit,
 )
+from repository.statement_category_repo import activate_statement_category
 
 logger = logging.getLogger("ledgerai.review_service")
 
@@ -82,7 +83,7 @@ def approve_transactions(
     staging_transaction_id: int,
     transactions: list,
 ):
-    """Move approved transactions to uncategorized_transactions."""
+    """Move approved transactions to uncategorized_transactions and activate the statement format."""
     insert_uncategorized_transactions(
         document_id=document_id,
         user_id=user_id,
@@ -90,5 +91,11 @@ def approve_transactions(
         staging_transaction_id=staging_transaction_id,
         transactions=transactions,
     )
+
+    # Activate the statement format so future documents use fast path (CODE only)
+    if statement_id:
+        activate_statement_category(statement_id)
+        logger.info("Activated statement_id=%s → ACTIVE (fast path enabled)", statement_id)
+
     insert_audit(document_id, "APPROVE")
     logger.info("Approved %d transactions for document_id=%s.", len(transactions), document_id)

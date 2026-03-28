@@ -11,6 +11,7 @@ import ast
 import re
 import logging
 from typing import List, Dict, Optional
+from datetime import datetime, date, timedelta
 
 logger = logging.getLogger("ledgerai.code_sandbox")
 
@@ -22,7 +23,7 @@ BLOCKED_BUILTINS = {"open", "eval", "exec", "compile", "__import__"}
 BLOCKED_MODULES = {"subprocess", "os", "sys", "shutil", "pathlib"}
 
 # Modules the LLM is allowed to import (safe, pure-computation only)
-ALLOWED_IMPORTS = {"re", "math", "datetime", "collections", "typing","json","string"}
+ALLOWED_IMPORTS = {"re", "math", "datetime", "collections", "typing"}
 
 
 def validate_code(code: str) -> Optional[str]:
@@ -85,6 +86,9 @@ def execute_extraction_code(code: str, full_text: str) -> List[Dict]:
         "re": re,
         "List": List,
         "Dict": Dict,
+        "datetime": datetime,
+        "date": date,
+        "timedelta": timedelta,
     }
 
     exec(cleaned, namespace)
