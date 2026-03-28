@@ -13,9 +13,9 @@ SUPABASE_ANON_KEY         = os.environ.get("SUPABASE_ANON_KEY", "")
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 
 GEMINI_API_KEY    = os.environ.get("GEMINI_API_KEY")
-CLASSIFIER_MODEL = os.environ.get("CLASSIFIER_MODEL", "gemini-3.1-flash-lite-preview")
+CLASSIFIER_MODEL = os.environ.get("CLASSIFIER_MODEL", "models/gemini-2.5-flash")
 # CODE_GEN_MODEL = os.environ.get("CODE_GEN_MODEL", "gemini-3.1-flash-lite-preview")
-LLM_PARSER_MODEL = os.environ.get("LLM_PARSER_MODEL", "gemini-3.1-flash-lite-preview")
+LLM_PARSER_MODEL = os.environ.get("LLM_PARSER_MODEL", "models/gemini-2.5-flash")
 
 
 # ── Code Generation LLM (Claude/OpenRouter/9router) ──────────

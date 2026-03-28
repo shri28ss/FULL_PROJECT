@@ -11,10 +11,10 @@ import json
 import logging
 
 from google import genai
-from config import GEMINI_API_KEY, GEMINI_MODEL_NAME
+from config import OPENROUTER_API_KEY, LLM_PARSER_MODEL
 from services.llm_retry import call_with_retry
 
-client = genai.Client(api_key=GEMINI_API_KEY)
+client = genai.Client(api_key=OPENROUTER_API_KEY)
 logger = logging.getLogger("ledgerai.llm_parser")
 
 
@@ -26,56 +26,71 @@ def parse_with_llm(full_text: str, identifier_json: dict) -> str:
     doc_family = identifier_json.get("document_family", "BANK_ACCOUNT_STATEMENT")
     doc_subtype = identifier_json.get("document_subtype", "")
 
-    # Get parsing hints to help LLM skip non-transaction rows
-    hints = identifier_json.get("parsing_hints", {})
-    skip_labels = hints.get("summary_section_labels", [])[:10]
-    layout = hints.get("layout_type", "SINGLE_COLUMN")
-
-    skip_instruction = ""
-    if skip_labels:
-        skip_instruction = f"\n- SKIP lines starting with: {', '.join(skip_labels)}"
-
     prompt = f"""
-Extract ALL transactions from {doc_family} ({doc_subtype}).
+You are a financial data extraction engine.
 
-LAYOUT: {layout}{skip_instruction}
+Extract ALL transaction entries from the provided document text.
 
-STEPS:
-1. Find transaction lines (date + description + amount)
-2. Handle multi-line transactions CAREFULLY:
-   - Only merge if next line is clearly a continuation (no date, no amount, indented or very short)
-   - DO NOT merge if next line looks like a separate transaction or has amounts
-   - DO NOT merge lines separated by page breaks, section dividers, or pipe symbols (|)
-   - When in doubt, treat as separate transactions rather than merging
-3. Extract details field AS-IS (keep all prefixes, reference numbers, original text)
-4. Classify debit vs credit (use ALL methods):
-   - Column headers (Debit/Credit, Withdrawal/Deposit)
-   - Balance change: decreased = debit (out), increased = credit (in)
-   - Keywords: PAYMENT/REFUND/DEPOSIT = credit, PURCHASE/FEE/WITHDRAWAL = debit
-5. Skip: headers, footers, summaries (Opening/Closing Balance, Total)
+════════════════════════════════════════════
+DOCUMENT INFO
+════════════════════════════════════════════
+Document Family: {doc_family}
+Document Subtype: {doc_subtype}
+Institution: {identifier_json.get("institution_name", "Unknown")}
 
-CRITICAL RULES:
-- Every transaction needs EXACTLY ONE of debit or credit (never both, never neither)
-- If unsure, use balance change to decide
-- Normalize dates to YYYY-MM-DD
-- Handle Indian number format (1,00,000.00)
-- Details field: preserve original text exactly as it appears, do NOT strip prefixes or clean
-- DO NOT merge unrelated lines - be conservative with multi-line merging
-- Confidence: 0.95 normal, 0.85 if debit/credit unclear, 0.70 if uncertain
+════════════════════════════════════════════
+RULES
+════════════════════════════════════════════
 
-OUTPUT: [{{"date": "YYYY-MM-DD", "details": "...", "debit": float|null, "credit": float|null, "balance": float|null, "confidence": 0.0-1.0}}]
+1. Extract EVERY transaction row. A transaction starts with a date.
+2. SKIP these entirely — they are NOT transactions:
+   - Headers (Date, Particulars, Debit, Credit, Balance)
+   - Footers (Page numbers, disclaimers, generated on...)
+   - Summary rows (Opening Balance, Closing Balance, Total Debit/Credit)
+   - Account info (Branch, IFSC, MICR, Account Number)
+3. DETAILS field must contain ONLY the transaction narration/description:
+   - Do NOT include dates, amounts, page numbers, or header text in details.
+   - Do NOT include footer text, branch info, or account numbers in details.
+   - Example GOOD: "NEFT CR ACME CORP SALARY"
+   - Example BAD: "01/01/2025 NEFT CR ACME CORP 50000.00 Page 1 of 3"
+4. Handle Indian number formats (1,00,000.00).
+5. Normalize dates to YYYY-MM-DD.
+6. DEBIT/CREDIT: Every transaction MUST have either debit or credit filled (not both None).
+   - If running balance increases, the amount is credit.
+   - If running balance decreases, the amount is debit.
+   - If column headers say Withdrawal/Debit use those.
+   - If column headers say Deposit/Credit use those.
 
-DOCUMENT:
+════════════════════════════════════════════
+OUTPUT FORMAT (JSON ARRAY)
+════════════════════════════════════════════
+
+[
+  {{
+    "date": "YYYY-MM-DD",
+    "details": "<transaction description only, no dates/amounts/noise>",
+    "debit": <float or null>,
+    "credit": <float or null>,
+    "balance": <float or null>,
+    "confidence": <0.0 to 1.0>
+  }}
+]
+
+════════════════════════════════════════════
+DOCUMENT TEXT
+════════════════════════════════════════════
+
 {full_text}
 
-Return ONLY JSON array.
+════════════════════════════════════════════
+Return ONLY the JSON array. No markdown. No explanation.
 """
 
     logger.info("Starting LLM parse: family=%s, text_len=%d",
                 doc_family, len(full_text))
 
     response = call_with_retry(
-        client, GEMINI_MODEL_NAME, prompt,
+        client, LLM_PARSER_MODEL, prompt,
         config={"temperature": 0},
     )
 
