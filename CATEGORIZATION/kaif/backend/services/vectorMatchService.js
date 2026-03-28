@@ -79,6 +79,8 @@ async function findVectorMatch(cleanString, userId, transactionType) {
 
         if (!isMatch) continue;
 
+        console.debug(`🔑 Keyword rule matched: "${keyword}" (priority:${rule.priority}, template:${rule.target_template_id}) on "${uppercaseString.slice(0, 60)}"`);
+
         // Map the global template to the user's specific account, filtered by transaction type
         const { data: accData, error: accError } = await supabase
           .from('accounts')
@@ -95,6 +97,7 @@ async function findVectorMatch(cleanString, userId, transactionType) {
         }
 
         if (accData && accData.length > 0) {
+          console.info(`✅ GLOBAL_KEYWORD winner: "${keyword}" → template:${rule.target_template_id} → account:${accData[0].account_id}`);
           return {
             offset_account_id: accData[0].account_id,
             confidence_score: 0.95,
@@ -103,7 +106,7 @@ async function findVectorMatch(cleanString, userId, transactionType) {
         }
 
         // balance_nature mismatch — continue to next rule
-        console.warn(`⚠️ Keyword rule matched but balance_nature mismatch. Template: ${rule.target_template_id}, Required: ${requiredBalanceNature}`);
+        console.warn(`⚠️ Keyword rule "${keyword}" (template:${rule.target_template_id}) skipped — balance_nature mismatch. Required: ${requiredBalanceNature}`);
       }
     }
 
