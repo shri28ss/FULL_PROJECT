@@ -64,7 +64,7 @@ async function createLedgerEntries(transactionId, baseAccountId, offsetAccountId
 
 /**
  * recategorizeTransaction(req, res)
- * Updates a transaction with a new offset_account_id and marks as USER_MANUAL.
+ * Updates a transaction with a new offset_account_id and marks as MANUAL.
  * Resets review_status to PENDING since the category changed.
  * Enforces user ownership.
  */
@@ -97,7 +97,7 @@ async function recategorizeTransaction(req, res) {
       .from('transactions')
       .update({
         offset_account_id: offset_account_id,
-        categorised_by: 'USER_MANUAL',
+        categorised_by: 'MANUAL',
         review_status: 'PENDING',
         is_uncategorised: isUncategorised
       })
@@ -373,7 +373,7 @@ async function manualCategorizeTransaction(req, res) {
         details: uncatData.details,
         amount: uncatData.debit || uncatData.credit,
         transaction_type: uncatData.debit > 0 ? 'DEBIT' : 'CREDIT',
-        categorised_by: 'USER_MANUAL',
+        categorised_by: 'MANUAL',
         confidence_score: 1.00,
         posting_status: 'POSTED',
         review_status: 'APPROVED',

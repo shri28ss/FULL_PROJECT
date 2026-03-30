@@ -5,13 +5,13 @@ import { supabase } from '../shared/supabase';
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000';
 
 const CAT_COLORS = {
-  'USER_MANUAL': '#3b82f6',     // Blue
-  'GLOBAL_RULE': '#10b981',     // Green
-  'TRAPDOOR_FILTER': '#f59e0b', // Orange
-  'PERSONAL_EXACT': '#8b5cf6',  // Purple
-  'PERSONAL_VECTOR': '#a855f7', // Violet
-  'GLOBAL_VECTOR': '#ec4899',   // Pink
-  'LLM_PREDICTION': '#ef4444',  // Red
+  'MANUAL': '#3b82f6',     // Blue
+  'G_RULE': '#10b981',     // Green
+  'FILTER': '#f59e0b', // Orange
+  'P_EXACT': '#8b5cf6',  // Purple
+  'P_VEC': '#a855f7', // Violet
+  'G_VEC': '#ec4899',   // Pink
+  'LLM': '#ef4444',  // Red
   'UNKNOWN': 'var(--text-secondary)'          // Gray
 };
 

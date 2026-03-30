@@ -52,7 +52,7 @@ async function findVectorMatch(cleanString, userId, transactionType) {
       return {
         offset_account_id: pData[0].account_id,
         confidence_score: 1.00,
-        categorised_by: 'PERSONAL_VECTOR'
+        categorised_by: 'P_VEC'
       };
     }
 
@@ -97,11 +97,11 @@ async function findVectorMatch(cleanString, userId, transactionType) {
         }
 
         if (accData && accData.length > 0) {
-          console.info(`✅ GLOBAL_KEYWORD winner: "${keyword}" → template:${rule.target_template_id} → account:${accData[0].account_id}`);
+          console.info(`✅ G_KEY winner: "${keyword}" → template:${rule.target_template_id} → account:${accData[0].account_id}`);
           return {
             offset_account_id: accData[0].account_id,
             confidence_score: 0.95,
-            categorised_by: 'GLOBAL_KEYWORD'
+            categorised_by: 'G_KEY'
           };
         }
 
@@ -146,7 +146,7 @@ async function findVectorMatch(cleanString, userId, transactionType) {
         return {
           offset_account_id: accData[0].account_id,
           confidence_score: 0.85,
-          categorised_by: 'GLOBAL_VECTOR'
+          categorised_by: 'G_VEC'
         };
       }
 

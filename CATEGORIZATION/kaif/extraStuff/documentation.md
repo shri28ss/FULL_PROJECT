@@ -387,7 +387,7 @@ CREATE TABLE transactions (
     clean_merchant_name VARCHAR(255) NULL, 
     amount DECIMAL(18,2) NOT NULL,
     transaction_type ENUM('DEBIT','CREDIT') NOT NULL, 
-    categorised_by ENUM('USER_MANUAL','GLOBAL_RULE','TRAPDOOR_FILTER','PERSONAL_EXACT','PERSONAL_VECTOR','GLOBAL_VECTOR','LLM_PREDICTION') NOT NULL,
+    categorised_by ENUM('MANUAL','G_RULE','FILTER','P_EXACT','P_VEC','G_VEC','LLM') NOT NULL,
     is_contra BOOLEAN NOT NULL DEFAULT FALSE,
     confidence_score DECIMAL(5,2) NOT NULL,
     vector_distance DECIMAL(8,6) NULL,
@@ -412,8 +412,8 @@ The categorization engine operates on a strict, prioritized Order of Operations 
 #### **Stage 1: Rules Engine (Deterministic Fast-Path)**
 
 * Runs **`rulesEngine.evaluateTransaction(rawDetails)`** using the **RAW, un-sanitized string**. (Sanitization destroys prefixes like `UPI-` or `ACHD-`).
-* **FAST_PATH**: Maps absolute strings directly to Template IDs (`GLOBAL_RULE`).
-* **EXACT_THEN_DUMP**: Intercepts Garbage VPA pointers and routes to Uncategorized (`TRAPDOOR_FILTER`).
+* **FAST_PATH**: Maps absolute strings directly to Template IDs (`G_RULE`).
+* **EXACT_THEN_DUMP**: Intercepts Garbage VPA pointers and routes to Uncategorized (`FILTER`).
 * **VECTOR_SEARCH**: Extracts clean strings via Regex and skips NER, passing directly to Stage 3.
 * **Critical Postgres Note**: Evaluate is_active using strict boolean logic (if (rule.is_active)), as PostgreSQL natively supports BOOLEAN types, unlike MySQL's TINYINT.
 
@@ -542,7 +542,7 @@ To securely auditing overall rates layouts drivers, items groups sequentially do
 * **Bucket 1: Shadow Audit (40%)**:
   Filters transactions holding high confidence maps `(> 0.90)` categorized by vector models BUT flagged with dispute filters variables forwards `needs_ml_training = TRUE`.
 * **Bucket 2: Prompt Drift (15%)**:
-  Evaluates absolute direct `LLM_PREDICTION` responses offsets verifying model accuracy weights layouts forwards insulation workflows safely structure solvers backwards.
+  Evaluates absolute direct `LLM` responses offsets verifying model accuracy weights layouts forwards insulation workflows safely structure solvers backwards.
 * **Bucket 3: Edge Cases (25%)**:
   Targets anomalous aggregates nodes downwards downwards buffers folders including tax assignments descriptions mappings structures OR Large transaction bounds (`AVG(amount) * 3`) thresholds rules.
 * **Bucket 4: True Random (20%)**:

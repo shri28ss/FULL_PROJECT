@@ -295,13 +295,13 @@ CREATE TYPE public.balance_nature AS ENUM (
 --
 
 CREATE TYPE public.categorisation_method AS ENUM (
-    'USER_MANUAL',
-    'GLOBAL_RULE',
-    'TRAPDOOR_FILTER',
-    'PERSONAL_EXACT',
-    'PERSONAL_VECTOR',
-    'GLOBAL_VECTOR',
-    'LLM_PREDICTION'
+    'MANUAL',
+    'G_RULE',
+    'FILTER',
+    'P_EXACT',
+    'P_VEC',
+    'G_VEC',
+    'LLM'
 );
 
 

@@ -51,7 +51,7 @@ async function checkExactMatch(userId, rawString) {
       return {
         offset_account_id: matches[0].account_id,
         confidence_score: 1.00, // Strict Requirement
-        categorised_by: 'PERSONAL_EXACT' // Strict Requirement
+        categorised_by: 'P_EXACT' // Strict Requirement
       };
     }
 

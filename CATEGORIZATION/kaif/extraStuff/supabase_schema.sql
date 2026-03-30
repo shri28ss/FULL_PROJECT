@@ -180,8 +180,8 @@ CREATE TRIGGER update_account_identifiers_updated_at
 DO $$ BEGIN
     CREATE TYPE doc_status AS ENUM ('UPLOADED', 'PROCESSED', 'FAILED');
     CREATE TYPE categorisation_method AS ENUM (
-        'USER_MANUAL','GLOBAL_RULE','TRAPDOOR_FILTER','PERSONAL_EXACT',
-        'PERSONAL_VECTOR','GLOBAL_VECTOR','LLM_PREDICTION'
+        'MANUAL','G_RULE','FILTER','P_EXACT',
+        'P_VEC','G_VEC','LLM'
     );
     CREATE TYPE posting_status AS ENUM ('DRAFT', 'POSTED', 'REVERSED');
     CREATE TYPE attention_level AS ENUM ('LOW', 'MEDIUM', 'HIGH');

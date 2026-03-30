@@ -112,7 +112,7 @@ async function findAndLinkContras(transactionsBatch, userId, supabaseClient) {
                     // Side A — mark contra, offset points to Side B's account
                     txn.offset_account_id = cBaseAccountId;
                     txn.is_contra = true;
-                    txn.categorised_by = 'GLOBAL_RULE';
+                    txn.categorised_by = 'G_RULE';
                     txn.confidence_score = 1.00;
 
                     // Side B — also mark contra, offset points back to Side A's account
@@ -121,7 +121,7 @@ async function findAndLinkContras(transactionsBatch, userId, supabaseClient) {
                         ...transactionsBatch[j],
                         offset_account_id: baseAccountId,
                         is_contra: true,
-                        categorised_by: 'GLOBAL_RULE',
+                        categorised_by: 'G_RULE',
                         confidence_score: 1.00
                     };
                     resolvedBatch.push(sideB);
@@ -157,7 +157,7 @@ async function findAndLinkContras(transactionsBatch, userId, supabaseClient) {
             if (!error && dbMatch && dbMatch.length > 0) {
                 txn.offset_account_id = dbMatch[0].base_account_id;
                 txn.is_contra = true;
-                txn.categorised_by = 'GLOBAL_RULE';
+                txn.categorised_by = 'G_RULE';
                 txn.confidence_score = 1.00;
 
                 // Retroactively update the mirror transaction that was already written.
@@ -197,7 +197,7 @@ async function findAndLinkContras(transactionsBatch, userId, supabaseClient) {
                         .update({
                             is_contra: true,
                             is_uncategorised: false, // contra is always categorised — it routes to the mirror account
-                            categorised_by: 'GLOBAL_RULE',
+                            categorised_by: 'G_RULE',
                             offset_account_id: txn.account_id || txn.base_account_id,
                             attention_level: 'LOW',
                             review_status: 'PENDING',

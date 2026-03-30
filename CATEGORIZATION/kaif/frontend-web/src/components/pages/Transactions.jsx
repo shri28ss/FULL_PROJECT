@@ -76,7 +76,15 @@ const Transactions = () => {
   const [manualTarget, setManualTarget] = useState(null);
   const [approvingIds, setApprovingIds] = useState(new Set());
   const [selectedIds, setSelectedIds] = useState(new Set());
-  const [correctingId, setCorrectingId] = useState(null); // uncategorized_transaction_id being edited
+  const [correctingId, setCorrectingId] = useState(null);
+
+  // ── Filter popup state ────────────────────────────────────────
+  const [isFilterOpen, setIsFilterOpen] = useState(false);
+  const filterRef = useRef(null);
+  const [filterAccounts, setFilterAccounts] = useState([]); // { account_id, account_name }
+  const [filterDocuments, setFilterDocuments] = useState([]); // { document_id, file_name }
+  const [selectedAccountIds, setSelectedAccountIds] = useState(new Set());
+  const [selectedDocIds, setSelectedDocIds] = useState(new Set());
 
   const fetchTransactions = async (currentFilter = activeFilter) => {
     setLoading(true);
@@ -94,6 +102,8 @@ const Transactions = () => {
           credit,
           document_id,
           account_id,
+          source_account:account_id ( account_id, account_name ),
+          source_document:document_id ( document_id, file_name ),
           transactions!uncategorized_transaction_id (
             transaction_id,
             review_status,
@@ -134,9 +144,75 @@ const Transactions = () => {
     }
   };
 
+  // Populate filter options once on mount
   useEffect(() => {
     fetchTransactions('ALL');
+
+    const loadFilterOptions = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      // Distinct accounts that appear in uncategorized_transactions
+      const { data: accData } = await supabase
+        .from('uncategorized_transactions')
+        .select('source_account:account_id ( account_id, account_name )')
+        .eq('user_id', user.id);
+
+      const { data: docData } = await supabase
+        .from('uncategorized_transactions')
+        .select('source_document:document_id ( document_id, file_name )')
+        .eq('user_id', user.id);
+
+      // De-duplicate
+      const accMap = {};
+      (accData || []).forEach(r => {
+        if (r.source_account) accMap[r.source_account.account_id] = r.source_account;
+      });
+      const docMap = {};
+      (docData || []).forEach(r => {
+        if (r.source_document) docMap[r.source_document.document_id] = r.source_document;
+      });
+
+      setFilterAccounts(Object.values(accMap));
+      setFilterDocuments(Object.values(docMap));
+    };
+
+    loadFilterOptions();
   }, []);
+
+  // Close filter popup on outside click
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (filterRef.current && !filterRef.current.contains(e.target)) {
+        setIsFilterOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const toggleAccountFilter = (id) => {
+    setSelectedAccountIds(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  const toggleDocFilter = (id) => {
+    setSelectedDocIds(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  const clearAllFilters = () => {
+    setSelectedAccountIds(new Set());
+    setSelectedDocIds(new Set());
+  };
+
+  const activeFilterCount = selectedAccountIds.size + selectedDocIds.size;
 
   const handleCategorize = async () => {
     const uncategorizedItems = transactions.filter(txn => !(txn.transactions && txn.transactions.length > 0));
@@ -331,8 +407,12 @@ const Transactions = () => {
 
   const filteredTransactions = transactions.filter((txn) => {
     const isCategorised = txn.transactions && txn.transactions.length > 0;
-    if (activeFilter === 'PENDING_CAT') return !isCategorised;
-    if (activeFilter === 'PENDING_APP') return isCategorised && txn.transactions[0].review_status === 'PENDING';
+    if (activeFilter === 'PENDING_CAT' && isCategorised) return false;
+    if (activeFilter === 'PENDING_APP' && !(isCategorised && txn.transactions[0].review_status === 'PENDING')) return false;
+    // Apply account filter
+    if (selectedAccountIds.size > 0 && !selectedAccountIds.has(txn.account_id)) return false;
+    // Apply document filter
+    if (selectedDocIds.size > 0 && !selectedDocIds.has(txn.document_id)) return false;
     return true;
   });
 
@@ -420,7 +500,7 @@ const Transactions = () => {
           <h1>Transactions</h1>
           <p>Manage and categorize your bank statements and ledger entries.</p>
         </div>
-        <div className="header-actions">
+        <div class="header-actions">
           <button
             className="action-btn upload"
             onClick={() => setIsUploadOpen(true)}
@@ -460,6 +540,70 @@ const Transactions = () => {
           className={`filter-tab ${activeFilter === 'PENDING_APP' ? 'active' : ''}`}
           onClick={() => handleFilterChange('PENDING_APP')}
         >Pending Approval</button>
+
+        {/* ── Filter popup ── pushed to the right */}
+        <div className="filter-popup-wrapper" ref={filterRef} style={{ marginLeft: 'auto' }}>
+          <button
+            className={`filter-tab ${activeFilterCount > 0 ? 'filter-tab-active' : ''}`}
+            onClick={() => setIsFilterOpen(v => !v)}
+            style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="4" y1="6" x2="20" y2="6"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="11" y1="18" x2="13" y2="18"/></svg>
+            Filter
+            {activeFilterCount > 0 && (
+              <span className="filter-count-badge">{activeFilterCount}</span>
+            )}
+          </button>
+
+          {isFilterOpen && (
+            <div className="filter-popup">
+              <div className="filter-popup-header">
+                <span>Filters</span>
+                {activeFilterCount > 0 && (
+                  <button className="filter-clear-btn" onClick={clearAllFilters}>Clear all</button>
+                )}
+              </div>
+
+              {filterAccounts.length > 0 && (
+                <div className="filter-group">
+                  <div className="filter-group-label">Bank Account</div>
+                  {filterAccounts.map(acc => (
+                    <label key={acc.account_id} className="filter-option">
+                      <input
+                        type="checkbox"
+                        checked={selectedAccountIds.has(acc.account_id)}
+                        onChange={() => toggleAccountFilter(acc.account_id)}
+                      />
+                      <span>{acc.account_name}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+
+              {filterDocuments.length > 0 && (
+                <div className="filter-group">
+                  <div className="filter-group-label">Uploaded Document</div>
+                  {filterDocuments.map(doc => (
+                    <label key={doc.document_id} className="filter-option">
+                      <input
+                        type="checkbox"
+                        checked={selectedDocIds.has(doc.document_id)}
+                        onChange={() => toggleDocFilter(doc.document_id)}
+                      />
+                      <span title={doc.file_name}>
+                        {doc.file_name.length > 30 ? doc.file_name.slice(0, 28) + '…' : doc.file_name}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              )}
+
+              {filterAccounts.length === 0 && filterDocuments.length === 0 && (
+                <p className="filter-empty">No filter options available yet.</p>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="transactions-content">
@@ -472,68 +616,79 @@ const Transactions = () => {
                   <p>Loading transactions...</p>
                 </div>
               ) : getGroupedTransactions() && getGroupedTransactions().length > 0 ? (
-                <div className="placeholder-rows">
-                  {getGroupedTransactions().map((group) => (
-                    <div key={group.level}>
-                      <div className="attention-group-header">
-                        <button
-                          className={`select-all-btn ${isGroupSelected(group.level) ? 'active' : ''}`}
-                          onClick={() => toggleSelectAll(group.level)}
-                        >
-                          {isGroupSelected(group.level) ? '✓ Deselect' : '☐ Select'}
-                        </button>
-                        <span className={`attention-label ${group.level.toLowerCase()}`}>
-                          {group.level} ATTENTION
-                        </span>
-                        <span style={{ marginLeft: 'auto', fontSize: '12px', color: 'var(--text-secondary)' }}>
-                          ({group.transactions.length})
-                        </span>
-                      </div>
-                      {group.transactions.map((txn) => {
-                        const isChecked = selectedIds.has(txn.transactions[0].transaction_id);
-                        const accountName = txn.transactions[0].accounts
-                          ? txn.transactions[0].accounts.account_name
-                          : '-';
-                        const isUncategorised = txn.transactions[0].is_uncategorised;
+                <>
+                  <div className="table-header grouped">
+                    <div></div>
+                    <div>Date</div>
+                    <div>Details</div>
+                    <div>Amount</div>
+                    <div>Account</div>
+                    <div>Categorised By</div>
+                  </div>
+                  <div className="placeholder-rows">
+                    {getGroupedTransactions().map((group) => (
+                      <div key={group.level}>
+                        <div className="attention-group-header">
+                          <button
+                            className={`select-all-btn ${isGroupSelected(group.level) ? 'active' : ''}`}
+                            onClick={() => toggleSelectAll(group.level)}
+                          >
+                            {isGroupSelected(group.level) ? '✓ Deselect' : '☐ Select'}
+                          </button>
+                          <span className={`attention-label ${group.level.toLowerCase()}`}>
+                            {group.level} ATTENTION
+                          </span>
+                          <span style={{ marginLeft: 'auto', fontSize: '12px', color: 'var(--text-secondary)' }}>
+                            ({group.transactions.length})
+                          </span>
+                        </div>
+                        {group.transactions.map((txn) => {
+                          const isChecked = selectedIds.has(txn.transactions[0].transaction_id);
+                          const accountName = txn.transactions[0].accounts
+                            ? txn.transactions[0].accounts.account_name
+                            : '-';
+                          const isUncategorised = txn.transactions[0].is_uncategorised;
+                          const categorisedBy = txn.transactions[0].categorised_by || '-';
 
-                        return (
-                          <div key={txn.uncategorized_transaction_id} className="table-row grouped">
-                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                              <input
-                                type="checkbox"
-                                className="row-checkbox"
-                                checked={isChecked}
-                                disabled={isUncategorised}
-                                onChange={() => {
-                                  const newSelected = new Set(selectedIds);
-                                  if (isChecked) {
-                                    newSelected.delete(txn.transactions[0].transaction_id);
-                                  } else {
-                                    newSelected.add(txn.transactions[0].transaction_id);
-                                  }
-                                  setSelectedIds(newSelected);
-                                }}
-                              />
+                          return (
+                            <div key={txn.uncategorized_transaction_id} className="table-row grouped">
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                <input
+                                  type="checkbox"
+                                  className="row-checkbox"
+                                  checked={isChecked}
+                                  disabled={isUncategorised}
+                                  onChange={() => {
+                                    const newSelected = new Set(selectedIds);
+                                    if (isChecked) {
+                                      newSelected.delete(txn.transactions[0].transaction_id);
+                                    } else {
+                                      newSelected.add(txn.transactions[0].transaction_id);
+                                    }
+                                    setSelectedIds(newSelected);
+                                  }}
+                                />
+                              </div>
+                              <div>{new Date(txn.txn_date).toLocaleDateString()}</div>
+                              <div className="details-cell">{txn.details}</div>
+                              {renderAmountCell(txn)}
+                              <div
+                                className={txn.transactions[0].accounts ? 'account-cell-clickable' : ''}
+                                onClick={() => { if (txn.transactions[0].accounts) setRecatTarget(txn); }}
+                                style={{ cursor: txn.transactions[0].accounts ? 'pointer' : 'default' }}
+                              >
+                                {accountName}
+                              </div>
+                              <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
+                                {categorisedBy}
+                              </div>
                             </div>
-                            <div>{new Date(txn.txn_date).toLocaleDateString()}</div>
-                            <div className="details-cell">{txn.details}</div>
-                            {renderAmountCell(txn)}
-                            <div
-                              className={txn.transactions[0].accounts ? 'account-cell-clickable' : ''}
-                              onClick={() => { if (txn.transactions[0].accounts) setRecatTarget(txn); }}
-                              style={{ cursor: txn.transactions[0].accounts ? 'pointer' : 'default' }}
-                            >
-                              {accountName}
-                            </div>
-                            <div>
-                              <span className="status-badge pending-approval">Pending Approval</span>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ))}
-                </div>
+                          );
+                        })}
+                      </div>
+                    ))}
+                  </div>
+                </>
               ) : (
                 <div className="empty-state" style={{ padding: '40px' }}>
                   <span className="empty-icon" style={{ opacity: 0.15 }}>
@@ -550,7 +705,7 @@ const Transactions = () => {
                 style={{
                   gridTemplateColumns: activeFilter === 'PENDING_CAT'
                     ? '110px 1fr 110px 150px 160px'
-                    : '110px 1fr 110px 150px 140px 160px 120px'
+                    : '110px 1fr 110px 150px 140px 160px 40px'
                 }}
               >
                 <div>Date</div>
@@ -602,7 +757,7 @@ const Transactions = () => {
                         style={{
                           gridTemplateColumns: activeFilter === 'PENDING_CAT'
                             ? '110px 1fr 110px 150px 160px'
-                            : '110px 1fr 110px 150px 140px 160px 120px'
+                            : '110px 1fr 110px 150px 140px 160px 40px'
                         }}
                       >
                         <div>{new Date(txn.txn_date).toLocaleDateString()}</div>

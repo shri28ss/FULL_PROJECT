@@ -9,7 +9,7 @@ require('dotenv').config();
  *
  * @param {Array} uncategorizedArray - List of transactions that failed deterministic checks.
  * @param {Array} availableCategories - List of valid categories [{ id: 123, name: 'Rent' }]
- * @returns {Promise<Array>} List of transaction items categorized with categorised_by='LLM_PREDICTION'
+ * @returns {Promise<Array>} List of transaction items categorized with categorised_by='LLM'
  */
 async function categorizeBatch(uncategorizedArray, availableCategories) {
   try {
@@ -172,7 +172,7 @@ ${JSON.stringify(batch.map(t => ({
         if (originalTxn) {
           safeResults.push({
             ...originalTxn,
-            categorised_by: 'LLM_PREDICTION',
+            categorised_by: 'LLM',
             offset_account_id: suggested_account_id,
             confidence_score: parseFloat(confidence) || 0.50
           });
