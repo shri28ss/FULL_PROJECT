@@ -272,8 +272,8 @@ async def upload_and_process(
 
     doc_result = sb.table("documents").insert({
         "user_id": user_id,
-        "file_name": safe_filename,           # same hash name as stored in bucket: {hash}.pdf
-        "file_path": storage_path,           # full path in Supabase Storage: {user_id}/{hash}.pdf
+        "file_name": file.filename,            # original name as uploaded by user e.g. "HDFC_March.pdf"
+        "file_path": storage_path,             # hashed storage path: {user_id}/{hash}.pdf
         "is_password_protected": is_pw,
         "status": "UPLOADED",
     }).execute()
