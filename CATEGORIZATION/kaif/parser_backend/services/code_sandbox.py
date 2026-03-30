@@ -9,6 +9,15 @@ open, eval, exec, os, sys, subprocess usage.
 
 import ast
 import re
+import json
+import math
+import string
+import decimal
+import collections
+import collections.abc
+import itertools
+import functools
+import typing
 import logging
 from typing import List, Dict, Optional
 from datetime import datetime, date, timedelta
@@ -23,7 +32,19 @@ BLOCKED_BUILTINS = {"open", "eval", "exec", "compile", "__import__"}
 BLOCKED_MODULES = {"subprocess", "os", "sys", "shutil", "pathlib"}
 
 # Modules the LLM is allowed to import (safe, pure-computation only)
-ALLOWED_IMPORTS = {"re", "math", "datetime", "collections", "typing"}
+ALLOWED_IMPORTS = {
+    "re",
+    "math",
+    "json",
+    "string",
+    "datetime",
+    "decimal",
+    "collections",
+    "collections.abc",
+    "itertools",
+    "functools",
+    "typing",
+}
 
 
 def validate_code(code: str) -> Optional[str]:
@@ -83,12 +104,24 @@ def execute_extraction_code(code: str, full_text: str) -> List[Dict]:
         raise RuntimeError(f"Code validation failed: {error}")
 
     namespace = {
+        # stdlib modules
         "re": re,
-        "List": List,
-        "Dict": Dict,
+        "json": json,
+        "math": math,
+        "string": string,
+        "decimal": decimal,
+        "collections": collections,
+        "itertools": itertools,
+        "functools": functools,
+        "typing": typing,
+        # datetime helpers
         "datetime": datetime,
         "date": date,
         "timedelta": timedelta,
+        # common typing aliases
+        "List": List,
+        "Dict": Dict,
+        "Optional": Optional,
     }
 
     exec(cleaned, namespace)
