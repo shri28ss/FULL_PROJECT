@@ -11,7 +11,7 @@ import threading
 import uuid
 import hashlib
 from typing import Optional
-from db.connection import get_client
+from db.connection import get_client, make_client, set_thread_client, clear_thread_client
 from services.account_detector import get_user_accounts, link_document_to_account
 from auth.utils import get_current_user
 
@@ -297,14 +297,27 @@ async def upload_and_process(
         We pass tmp_file_path directly to process_document so the DB
         file_path column always holds the permanent Supabase Storage path.
         Never patch the DB — that was the root cause of file_path going NULL.
+
+        IMPORTANT: we call make_client() here to give this thread its own
+        httpx connection pool, completely isolated from the FastAPI request
+        handlers that use the get_client() singleton.  supabase-py uses HTTP/2
+        which multiplexes all requests onto one socket — sharing it between a
+        long-running pipeline and concurrent status-poll requests causes
+        EAGAIN / ReadError regardless of how many documents are uploading.
+
+        set_thread_client() registers the fresh client as the thread-local
+        override so every repo call inside process_document() automatically
+        picks it up via get_client() — no changes needed in any repo file.
         """
+        thread_sb = make_client()
+        set_thread_client(thread_sb)
         try:
             from services.processing_engine import process_document
-            # Pass the local temp path directly — DB file_path stays clean
             process_document(document_id, override_file_path=tmp_file_path)
         except Exception as e:
             logger.error("[ERROR] Processing failed for doc %s: %s", document_id, e)
         finally:
+            clear_thread_client()
             # Always delete the temp file — whether processing succeeded or not
             if os.path.exists(tmp_file_path):
                 try:
