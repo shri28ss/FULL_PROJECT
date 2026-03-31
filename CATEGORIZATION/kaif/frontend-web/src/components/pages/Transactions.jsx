@@ -86,8 +86,8 @@ const Transactions = () => {
   const [selectedAccountIds, setSelectedAccountIds] = useState(new Set());
   const [selectedDocIds, setSelectedDocIds] = useState(new Set());
 
-  const fetchTransactions = async (currentFilter = activeFilter) => {
-    setLoading(true);
+  const fetchTransactions = async (currentFilter = activeFilter, silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
@@ -140,7 +140,7 @@ const Transactions = () => {
     } catch (err) {
       console.error('Fetch transactions failed:', err);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
@@ -214,6 +214,13 @@ const Transactions = () => {
 
   const activeFilterCount = selectedAccountIds.size + selectedDocIds.size;
 
+  // ── Shared helper: patch one row in local state by uncategorized_transaction_id ──
+  const updateTxnInState = (uncatId, patchFn) => {
+    setTransactions(prev => prev.map(txn =>
+      txn.uncategorized_transaction_id === uncatId ? patchFn(txn) : txn
+    ));
+  };
+
   const handleCategorize = async () => {
     const uncategorizedItems = transactions.filter(txn => !(txn.transactions && txn.transactions.length > 0));
     if (uncategorizedItems.length === 0) {
@@ -233,7 +240,7 @@ const Transactions = () => {
       });
       if (response.ok) {
         showToast('✅ Bulk categorize success!', 'success');
-        fetchTransactions(activeFilter);
+        fetchTransactions(activeFilter, true);
       } else {
         showToast('Bulk categorization failed', 'error');
       }
@@ -245,38 +252,44 @@ const Transactions = () => {
     }
   };
 
-  const handleApprove = async (transactionId, isUncategorised) => {
+  const handleApprove = (transactionId, isUncategorised, uncatId) => {
     if (isUncategorised) {
       showToast('Cannot approve: transaction uses uncategorised account. Please assign a category first.', 'error');
       return;
     }
-    setApprovingIds((prev) => new Set(prev).add(transactionId));
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const response = await fetch(`${API_BASE_URL}/api/transactions/${transactionId}/approve`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${session?.access_token || ''}`
+    // Snapshot for rollback
+    const prev = transactions.find(t => t.uncategorized_transaction_id === uncatId);
+    // Update immediately — zero perceived latency
+    updateTxnInState(uncatId, txn => ({
+      ...txn,
+      transactions: [{ ...txn.transactions[0], review_status: 'APPROVED' }]
+    }));
+    // Fire API in background
+    (async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        const response = await fetch(`${API_BASE_URL}/api/transactions/${transactionId}/approve`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session?.access_token || ''}`
+          }
+        });
+        if (!response.ok) {
+          const errorData = await response.json();
+          showToast(errorData.error || 'Failed to approve — reverted', 'error');
+          // Roll back
+          if (prev) setTransactions(p => p.map(t =>
+            t.uncategorized_transaction_id === uncatId ? prev : t
+          ));
         }
-      });
-      if (response.ok) {
-        showToast('Transaction approved', 'success');
-        fetchTransactions(activeFilter);
-      } else {
-        const errorData = await response.json();
-        showToast(errorData.error || 'Failed to approve', 'error');
+      } catch {
+        showToast('Failed to approve — reverted', 'error');
+        if (prev) setTransactions(p => p.map(t =>
+          t.uncategorized_transaction_id === uncatId ? prev : t
+        ));
       }
-    } catch (err) {
-      console.error('Approve failed:', err);
-      showToast('Failed to approve', 'error');
-    } finally {
-      setApprovingIds((prev) => {
-        const next = new Set(prev);
-        next.delete(transactionId);
-        return next;
-      });
-    }
+    })();
   };
 
   const handleBulkApprove = async () => {
@@ -301,8 +314,17 @@ const Transactions = () => {
         } else {
           showToast(`${data.approved_count} transactions approved`, 'success');
         }
+        // Optimistic: mark approved IDs as APPROVED in local state
+        const blockedSet = new Set(data.blocked_transaction_ids || []);
+        setTransactions(prev => prev.map(txn => {
+          if (!txn.transactions?.[0]) return txn;
+          const tid = txn.transactions[0].transaction_id;
+          if (selectedIds.has(tid) && !blockedSet.has(tid)) {
+            return { ...txn, transactions: [{ ...txn.transactions[0], review_status: 'APPROVED' }] };
+          }
+          return txn;
+        }));
         setSelectedIds(new Set());
-        fetchTransactions(activeFilter);
       } else {
         if (data.blocked_transaction_ids && data.blocked_transaction_ids.length > 0) {
           const blockedCount = data.blocked_transaction_ids.length;
@@ -319,90 +341,151 @@ const Transactions = () => {
     }
   };
 
-  const handleRecategorize = async (selectedAccount) => {
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const response = await fetch(
-        `${API_BASE_URL}/api/transactions/${recatTarget.transactions[0].transaction_id}/recategorize`,
-        {
-          method: 'PATCH',
+  const handleRecategorize = (selectedAccount) => {
+    const uncatId = recatTarget.uncategorized_transaction_id;
+    const transactionId = recatTarget.transactions[0].transaction_id;
+    const prevTxn = transactions.find(t => t.uncategorized_transaction_id === uncatId);
+    // Close modal & update UI immediately
+    setRecatTarget(null);
+    updateTxnInState(uncatId, txn => ({
+      ...txn,
+      transactions: [{
+        ...txn.transactions[0],
+        offset_account_id: selectedAccount.account_id,
+        accounts: { account_name: selectedAccount.account_name },
+        review_status: 'PENDING',
+        is_uncategorised: false,
+      }]
+    }));
+    // Fire API in background
+    (async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        const response = await fetch(
+          `${API_BASE_URL}/api/transactions/${transactionId}/recategorize`,
+          {
+            method: 'PATCH',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${session?.access_token || ''}`
+            },
+            body: JSON.stringify({ offset_account_id: selectedAccount.account_id })
+          }
+        );
+        if (!response.ok) {
+          showToast('Failed to update category — reverted', 'error');
+          if (prevTxn) setTransactions(p => p.map(t =>
+            t.uncategorized_transaction_id === uncatId ? prevTxn : t
+          ));
+        }
+      } catch {
+        showToast('Failed to update category — reverted', 'error');
+        if (prevTxn) setTransactions(p => p.map(t =>
+          t.uncategorized_transaction_id === uncatId ? prevTxn : t
+        ));
+      }
+    })();
+  };
+
+  const handleManualCategorize = (selectedAccount) => {
+    const uncatId = manualTarget.uncategorized_transaction_id;
+    const prevTxn = transactions.find(t => t.uncategorized_transaction_id === uncatId);
+    // Close modal & update UI immediately
+    setManualTarget(null);
+    updateTxnInState(uncatId, txn => ({
+      ...txn,
+      transactions: [{
+        transaction_id: null, // will be filled by server, not needed for display
+        review_status: 'APPROVED',
+        attention_level: 'LOW',
+        offset_account_id: selectedAccount.account_id,
+        categorised_by: 'MANUAL',
+        is_uncategorised: false,
+        accounts: { account_name: selectedAccount.account_name },
+      }]
+    }));
+    // Fire API in background
+    (async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        const response = await fetch(`${API_BASE_URL}/api/transactions/manual-categorize`, {
+          method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${session?.access_token || ''}`
           },
-          body: JSON.stringify({ offset_account_id: selectedAccount.account_id })
+          body: JSON.stringify({
+            uncategorized_transaction_id: uncatId,
+            offset_account_id: selectedAccount.account_id
+          })
+        });
+        if (!response.ok) {
+          showToast('Failed to save categorization — reverted', 'error');
+          if (prevTxn) setTransactions(p => p.map(t =>
+            t.uncategorized_transaction_id === uncatId ? prevTxn : t
+          ));
         }
-      );
-      if (response.ok) {
-        showToast('Category updated', 'success');
-        setRecatTarget(null);
-        fetchTransactions(activeFilter);
-      } else {
-        showToast('Failed to update category', 'error');
+      } catch {
+        showToast('Failed to save categorization — reverted', 'error');
+        if (prevTxn) setTransactions(p => p.map(t =>
+          t.uncategorized_transaction_id === uncatId ? prevTxn : t
+        ));
       }
-    } catch (err) {
-      console.error('Recategorize failed:', err);
-      showToast('Failed to update category', 'error');
-    }
-  };
-
-  const handleManualCategorize = async (selectedAccount) => {
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const response = await fetch(`${API_BASE_URL}/api/transactions/manual-categorize`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${session?.access_token || ''}`
-        },
-        body: JSON.stringify({
-          uncategorized_transaction_id: manualTarget.uncategorized_transaction_id,
-          offset_account_id: selectedAccount.account_id
-        })
-      });
-      if (response.ok) {
-        showToast('Transaction categorised and approved', 'success');
-        setManualTarget(null);
-        fetchTransactions(activeFilter);
-      } else {
-        showToast('Failed to save categorization', 'error');
-      }
-    } catch (err) {
-      console.error('Manual categorize failed:', err);
-      showToast('Failed to save categorization', 'error');
-    }
+    })();
   };
 
   // Correct amount/type — clicking on the amount cell triggers this
-  const handleCorrect = async (uncategorizedTransactionId, amount, transaction_type) => {
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const response = await fetch(
-        `${API_BASE_URL}/api/transactions/${uncategorizedTransactionId}/correct`,
-        {
-          method: 'PATCH',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${session?.access_token || ''}`
-          },
-          body: JSON.stringify({ amount, transaction_type })
-        }
-      );
-      const data = await response.json();
-      if (response.ok) {
-        showToast('Amount corrected. Transaction reset to pending.', 'success');
-        setCorrectingId(null);
-        fetchTransactions(activeFilter);
-      } else if (response.status === 403) {
-        showToast(data.error, 'error');
-        setCorrectingId(null);
+  const handleCorrect = (uncategorizedTransactionId, amount, transaction_type) => {
+    const prevTxn = transactions.find(t => t.uncategorized_transaction_id === uncategorizedTransactionId);
+    // Update immediately
+    setCorrectingId(null);
+    updateTxnInState(uncategorizedTransactionId, txn => {
+      const updatedTxn = {
+        ...txn,
+        debit: transaction_type === 'DEBIT' ? amount : 0,
+        credit: transaction_type === 'CREDIT' ? amount : 0,
+      };
+      if (txn.transactions && txn.transactions.length > 0) {
+        updatedTxn.transactions = [{ ...txn.transactions[0], review_status: 'PENDING' }];
       } else {
-        showToast(data.error || 'Failed to correct transaction', 'error');
+        updatedTxn.transactions = [];
       }
-    } catch (err) {
-      console.error('Correct failed:', err);
-      showToast('Failed to correct transaction', 'error');
-    }
+      return updatedTxn;
+    });
+    // Fire API in background
+    (async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        const response = await fetch(
+          `${API_BASE_URL}/api/transactions/${uncategorizedTransactionId}/correct`,
+          {
+            method: 'PATCH',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${session?.access_token || ''}`
+            },
+            body: JSON.stringify({ amount, transaction_type })
+          }
+        );
+        const data = await response.json();
+        if (response.status === 403) {
+          showToast(data.error, 'error');
+          if (prevTxn) setTransactions(p => p.map(t =>
+            t.uncategorized_transaction_id === uncategorizedTransactionId ? prevTxn : t
+          ));
+        } else if (!response.ok) {
+          showToast(data.error || 'Failed to correct — reverted', 'error');
+          if (prevTxn) setTransactions(p => p.map(t =>
+            t.uncategorized_transaction_id === uncategorizedTransactionId ? prevTxn : t
+          ));
+        }
+      } catch {
+        showToast('Failed to correct — reverted', 'error');
+        if (prevTxn) setTransactions(p => p.map(t =>
+          t.uncategorized_transaction_id === uncategorizedTransactionId ? prevTxn : t
+        ));
+      }
+    })();
   };
 
   const filteredTransactions = transactions.filter((txn) => {
@@ -418,7 +501,6 @@ const Transactions = () => {
 
   const handleFilterChange = (newFilter) => {
     setActiveFilter(newFilter);
-    fetchTransactions(newFilter);
     if (newFilter !== 'PENDING_APP') {
       setSelectedIds(new Set());
     }
@@ -802,7 +884,7 @@ const Transactions = () => {
                             {status === 'PENDING' && isCategorised ? (
                               <button
                                 className="action-icon-btn approve"
-                                onClick={() => handleApprove(transactionId, isUncategorised)}
+                                onClick={() => handleApprove(transactionId, isUncategorised, txn.uncategorized_transaction_id)}
                                 title="Approve"
                                 disabled={isApproving}
                               >
