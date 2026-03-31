@@ -5,7 +5,14 @@ import '../styles/AccountPickerModal.css';
 
 const ACCOUNT_TYPE_ORDER = ['INCOME', 'EXPENSE', 'ASSET', 'LIABILITY', 'EQUITY'];
 
-const AccountPickerModal = ({ onSelect, onClose, currentAccountId, transactionDirection = null }) => {
+const AccountPickerModal = ({ 
+  onSelect, 
+  onClose, 
+  currentAccountId, 
+  transactionDirection = null,
+  preloadedAccounts = null,
+  onAccountCreated
+}) => {
   const [accounts, setAccounts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -19,6 +26,12 @@ const AccountPickerModal = ({ onSelect, onClose, currentAccountId, transactionDi
   const allowedBalanceNature = transactionDirection === 'DEBIT' ? 'DEBIT' : transactionDirection === 'CREDIT' ? 'CREDIT' : null;
 
   useEffect(() => {
+    if (preloadedAccounts) {
+      setAccounts(preloadedAccounts);
+      setLoading(false);
+      return;
+    }
+
     const fetchAccounts = async () => {
       if (!supabase) {
         console.error('Supabase client is null — check VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY');
@@ -65,7 +78,7 @@ const AccountPickerModal = ({ onSelect, onClose, currentAccountId, transactionDi
         searchInputRef.current.focus();
       }
     }, 0);
-  }, [allowedBalanceNature]);
+  }, [allowedBalanceNature, preloadedAccounts]);
 
   // Handle escape key
   useEffect(() => {
@@ -82,7 +95,11 @@ const AccountPickerModal = ({ onSelect, onClose, currentAccountId, transactionDi
   const groupedAccounts = () => {
     const grouped = {};
 
-    accounts.forEach((account) => {
+    const filteredList = allowedBalanceNature
+      ? accounts.filter(a => a.balance_nature === allowedBalanceNature)
+      : accounts;
+
+    filteredList.forEach((account) => {
       if (!grouped[account.account_type]) {
         grouped[account.account_type] = [];
       }
@@ -109,6 +126,7 @@ const AccountPickerModal = ({ onSelect, onClose, currentAccountId, transactionDi
 
   const handleAccountCreated = (newAccount) => {
     setAccounts((prev) => [...prev, newAccount]);
+    onAccountCreated?.(newAccount);
     setShowAddAccount(false);
   };
 

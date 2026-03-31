@@ -77,6 +77,7 @@ const Transactions = () => {
   const [approvingIds, setApprovingIds] = useState(new Set());
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [correctingId, setCorrectingId] = useState(null);
+  const [cachedAccounts, setCachedAccounts] = useState([]);
 
   // ── Filter popup state ────────────────────────────────────────
   const [isFilterOpen, setIsFilterOpen] = useState(false);
@@ -177,7 +178,23 @@ const Transactions = () => {
       setFilterDocuments(Object.values(docMap));
     };
 
+    const loadAllAccounts = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const { data: acctData } = await supabase
+        .from('accounts')
+        .select('account_id, account_name, account_type, balance_nature, parent_account_id, is_active')
+        .eq('user_id', user.id)
+        .eq('is_active', true)
+        .order('account_type', { ascending: true })
+        .order('account_name', { ascending: true });
+
+      setCachedAccounts(acctData || []);
+    };
+
     loadFilterOptions();
+    loadAllAccounts();
   }, []);
 
   // Close filter popup on outside click
@@ -213,6 +230,10 @@ const Transactions = () => {
   };
 
   const activeFilterCount = selectedAccountIds.size + selectedDocIds.size;
+
+  const handleAccountCreated = (newAccount) => {
+    setCachedAccounts(prev => [...prev, newAccount]);
+  };
 
   // ── Shared helper: patch one row in local state by uncategorized_transaction_id ──
   const updateTxnInState = (uncatId, patchFn) => {
@@ -917,18 +938,21 @@ const Transactions = () => {
       )}
       {recatTarget && (
         <AccountPickerModal
-          currentAccountId={recatTarget.transactions?.[0]?.offset_account_id}
-          transactionDirection={recatTarget.debit > 0 ? 'DEBIT' : 'CREDIT'}
-          onSelect={handleRecategorize}
           onClose={() => setRecatTarget(null)}
+          onSelect={handleRecategorize}
+          currentAccountId={recatTarget.transactions[0].offset_account_id}
+          transactionDirection={recatTarget.debit > 0 ? 'DEBIT' : 'CREDIT'}
+          preloadedAccounts={cachedAccounts}
+          onAccountCreated={handleAccountCreated}
         />
       )}
       {manualTarget && (
         <AccountPickerModal
-          transactionDirection={manualTarget.debit > 0 ? 'DEBIT' : 'CREDIT'}
-          currentAccountId={null}
-          onSelect={handleManualCategorize}
           onClose={() => setManualTarget(null)}
+          onSelect={handleManualCategorize}
+          transactionDirection={manualTarget.debit > 0 ? 'DEBIT' : 'CREDIT'}
+          preloadedAccounts={cachedAccounts}
+          onAccountCreated={handleAccountCreated}
         />
       )}
       <Toast toasts={toasts} />
