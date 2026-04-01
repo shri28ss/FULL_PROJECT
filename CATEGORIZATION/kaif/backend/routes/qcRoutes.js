@@ -1,11 +1,30 @@
 const express = require('express');
 const router = express.Router();
-const { deleteModule } = require('../qc/qcController');
+const { 
+  deleteModule, 
+  getGlobalKeywordRules, 
+  createKeywordRule, 
+  deleteKeywordRule,
+  getGlobalVectorCache,
+  createVectorCacheEntry,
+  deleteVectorCacheEntry
+} = require('../qc/qcController');
 const authMiddleware = require('../middleware/authMiddleware');
 const { requireQC } = require('../middleware/roleMiddleware');
 const rulesEngineService = require('../services/rulesEngineService');
 
+// COA Modules
 router.delete('/modules/:id', authMiddleware, requireQC, deleteModule);
+
+// Global Keyword Rules
+router.get('/keyword-rules', authMiddleware, requireQC, getGlobalKeywordRules);
+router.post('/keyword-rules', authMiddleware, requireQC, createKeywordRule);
+router.delete('/keyword-rules/:id', authMiddleware, requireQC, deleteKeywordRule);
+
+// Global Vector Cache
+router.get('/vector-cache', authMiddleware, requireQC, getGlobalVectorCache);
+router.post('/vector-cache', authMiddleware, requireQC, createVectorCacheEntry);
+router.delete('/vector-cache/:id', authMiddleware, requireQC, deleteVectorCacheEntry);
 
 // Hot-reload rules endpoint
 router.post('/reload-rules', authMiddleware, requireQC, async (req, res) => {
@@ -19,3 +38,4 @@ router.post('/reload-rules', authMiddleware, requireQC, async (req, res) => {
 });
 
 module.exports = router;
+
