@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import API from "../api/api";
 import { useNavigate } from "react-router-dom";
+import { useParsing } from "../context/ParsingContext";
 
 // ── Circular Processing Indicator ────────────────────────────────────────────
 const STAGE_META = {
@@ -20,8 +21,6 @@ const STAGE_META = {
 
 function CircularProgress({ processingStatus, status, elapsedSeconds, parsedType }) {
     let currentKey = processingStatus || status;
-    // When backend is in PARSING_TRANSACTIONS and it already knows the parsed type
-    // is CODE (format was found in DB), show the more specific DB-path message.
     if (currentKey === "PARSING_TRANSACTIONS" && parsedType === "CODE") {
         currentKey = "PARSING_TRANSACTIONS_CODE";
     }
@@ -33,113 +32,52 @@ function CircularProgress({ processingStatus, status, elapsedSeconds, parsedType
     return (
         <div style={{
             display: "flex", flexDirection: "column", alignItems: "center",
-            justifyContent: "center", padding: "2.5rem 1rem", gap: "1.25rem",
-            background: "linear-gradient(135deg, #f5f3ff 0%, #ede9fe 100%)",
-            borderRadius: "16px", border: "1px solid #ddd6fe",
-            margin: "1rem 0"
+            justifyContent: "center", padding: "1.5rem 1rem", gap: "1rem",
+            background: "rgba(99, 102, 241, 0.05)",
+            borderRadius: "16px", border: "1px solid rgba(99, 102, 241, 0.1)",
+            margin: "0.5rem 0"
         }}>
-            {/* SVG ring */}
-            <div style={{ position: "relative", width: 128, height: 128 }}>
-                <svg width="128" height="128" style={{ transform: "rotate(-90deg)" }}>
-                    {/* track */}
-                    <circle cx="64" cy="64" r={r} fill="none" stroke="#e0e7ff" strokeWidth="10" />
-                    {/* progress arc */}
+            <div style={{ position: "relative", width: 100, height: 100 }}>
+                <svg width="100" height="100" style={{ transform: "rotate(-90deg)" }}>
+                    <circle cx="50" cy="50" r={42} fill="none" stroke="rgba(0,0,0,0.05)" strokeWidth="8" />
                     <circle
-                        cx="64" cy="64" r={r}
+                        cx="50" cy="50" r={42}
                         fill="none"
                         stroke={meta.color}
-                        strokeWidth="10"
+                        strokeWidth="8"
                         strokeLinecap="round"
-                        strokeDasharray={circ}
-                        strokeDashoffset={offset}
-                        style={{ transition: "stroke-dashoffset 0.8s ease, stroke 0.4s ease" }}
+                        strokeDasharray={2 * Math.PI * 42}
+                        strokeDashoffset={2 * Math.PI * 42 - (meta.pct / 100) * 2 * Math.PI * 42}
+                        style={{ transition: "stroke-dashoffset 0.8s ease" }}
                     />
                 </svg>
-                {/* spinning overlay ring */}
-                <svg width="128" height="128"
-                    style={{
-                        position: "absolute", top: 0, left: 0,
-                        animation: "cpSpin 1.2s linear infinite"
-                    }}
-                >
-                    <circle
-                        cx="64" cy="64" r={r}
-                        fill="none"
-                        stroke={meta.color}
-                        strokeWidth="10"
-                        strokeLinecap="round"
-                        strokeDasharray={`${circ * 0.18} ${circ * 0.82}`}
-                        strokeDashoffset="0"
-                        opacity="0.55"
-                    />
-                </svg>
-                {/* centre percentage */}
-                <div style={{
-                    position: "absolute", inset: 0,
-                    display: "flex", flexDirection: "column",
-                    alignItems: "center", justifyContent: "center"
-                }}>
-                    <span style={{ fontSize: "1.4rem", fontWeight: 800, color: meta.color, lineHeight: 1 }}>
-                        {meta.pct}%
-                    </span>
-                    <span style={{ fontSize: "0.6rem", color: "#6b7280", fontWeight: 600, marginTop: 2 }}>
-                        complete
-                    </span>
+                <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
+                    <span style={{ fontSize: "1.1rem", fontWeight: 800, color: meta.color }}>{meta.pct}%</span>
                 </div>
             </div>
-
-            {/* Stage label */}
             <div style={{ textAlign: "center" }}>
-                <div style={{ fontSize: "1rem", fontWeight: 800, color: "#1e1b4b", marginBottom: "0.35rem" }}>
-                    {meta.label}
-                </div>
-                <div style={{ fontSize: "0.8rem", color: "#6b7280", maxWidth: 280, lineHeight: 1.5 }}>
-                    {meta.sub}
-                </div>
+                <div style={{ fontSize: "0.9rem", fontWeight: 800, color: "var(--text-primary)" }}>{meta.label}</div>
+                <div style={{ fontSize: "0.75rem", color: "var(--text-secondary)", maxWidth: 240 }}>{meta.sub}</div>
             </div>
-
-            {/* Elapsed time */}
-            <div style={{
-                display: "flex", alignItems: "center", gap: "0.4rem",
-                fontSize: "0.75rem", color: "#9ca3af", fontWeight: 600
-            }}>
-                <Clock size={12} />
-                {elapsedSeconds}s elapsed
+            <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontSize: "0.7rem", color: "var(--text-secondary)" }}>
+                <Clock size={12} /> {elapsedSeconds}s elapsed
             </div>
-
-            {/* Animated dots */}
-            <div style={{ display: "flex", gap: "6px" }}>
-                {[0,1,2].map(i => (
-                    <div key={i} style={{
-                        width: 7, height: 7, borderRadius: "50%",
-                        background: meta.color,
-                        animation: `cpDot 1.2s ease-in-out ${i * 0.2}s infinite alternate`
-                    }} />
-                ))}
-            </div>
-
-            <style>{`
-                @keyframes cpSpin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-                @keyframes cpDot  { from { opacity: 0.2; transform: scaleY(0.6); } to { opacity: 1; transform: scaleY(1.2); } }
-            `}</style>
         </div>
     );
 }
 
 export default function ParsingPage() {
     const navigate = useNavigate();
+    const { activeDoc, isExtracting, startExtraction, clearActiveDoc } = useParsing();
 
     const [file, setFile] = useState(null);
     const [password, setPassword] = useState("");
     const [needsPassword, setNeedsPassword] = useState(false);
     const [pdfType, setPdfType] = useState(null);
     const [status, setStatus] = useState("IDLE");
-    const [processingStatus, setProcessingStatus] = useState("");
     const [error, setError] = useState("");
-    const [documentId, setDocumentId] = useState(null);
     const fileInputRef = useRef(null);
 
-    // Dashboard state merged from Dashboard.jsx
     const [stats, setStats] = useState({ total: 0, parsed: 0, failed: 0, pending_review: 0 });
     const [recentDocs, setRecentDocs] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
@@ -148,7 +86,6 @@ export default function ParsingPage() {
 
     const sortOptions = ["Newest first", "Oldest first", "Last activity", "Alphabetically"];
 
-    // Fetch dashboard data on mount
     useEffect(() => {
         fetchData();
     }, []);
@@ -190,393 +127,154 @@ export default function ParsingPage() {
         }
     };
 
-    const formatTime = (dateStr) => {
-        const date = new Date(dateStr);
-        const now = new Date();
-        const diff = Math.floor((now - date) / 1000);
-        if (diff < 60) return "Just now";
-        if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-        if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-        return date.toLocaleDateString();
-    };
-
-    const statCards = [
-        { label: "Total Uploads", value: stats.total, icon: FileText, color: "#483EA8" },
-        { label: "Successfully Parsed", value: stats.parsed, icon: CheckCircle, color: "#27ae60" },
-        { label: "Failed/Corrupted", value: stats.failed, icon: AlertCircle, color: "#e74c3c" },
-        { label: "Pending Review", value: stats.pending_review, icon: Clock, color: "#f39c12" },
-    ];
-
     const steps = [
-        {
-            label: "Upload & Detect",
-            icon: Search,
-            statuses: ["DETECTING", "DETECTED", "PASSWORD_REQUIRED", "UPLOADING", "PROCESSING",
-                "EXTRACTING_TEXT", "IDENTIFYING_FORMAT", "PARSING_TRANSACTIONS", "AWAITING_REVIEW", "DONE"],
-        },
-        {
-            label: "Text Extraction",
-            icon: List,
-            statuses: ["EXTRACTING_TEXT", "IDENTIFYING_FORMAT", "PARSING_TRANSACTIONS", "AWAITING_REVIEW", "DONE"],
-        },
-        {
-            label: "Format Identification",
-            icon: Search,
-            statuses: ["IDENTIFYING_FORMAT", "PARSING_TRANSACTIONS", "AWAITING_REVIEW", "DONE"],
-            subtext: "Checking if format exists in DB...",
-        },
-        {
-            label: "Transaction Extraction",
-            icon: Cpu,
-            statuses: ["PARSING_TRANSACTIONS", "AWAITING_REVIEW", "DONE"],
-            subtext: "Running extraction pipeline...",
-        },
-        {
-            label: "Validation & Review",
-            icon: CheckCircle,
-            statuses: ["AWAITING_REVIEW", "DONE"],
-            subtext: "Checking code accuracy...",
-        },
+        { label: "Upload & Detect", icon: Search, statuses: ["UPLOADING", "PROCESSING", "EXTRACTING_TEXT", "IDENTIFYING_FORMAT", "PARSING_TRANSACTIONS", "AWAITING_REVIEW", "DONE"] },
+        { label: "Text Extraction", icon: List, statuses: ["EXTRACTING_TEXT", "IDENTIFYING_FORMAT", "PARSING_TRANSACTIONS", "AWAITING_REVIEW", "DONE"] },
+        { label: "Format Identification", icon: Search, statuses: ["IDENTIFYING_FORMAT", "PARSING_TRANSACTIONS", "AWAITING_REVIEW", "DONE"] },
+        { label: "Transaction Extraction", icon: Cpu, statuses: ["PARSING_TRANSACTIONS", "AWAITING_REVIEW", "DONE"] },
+        { label: "Finalizing", icon: CheckCircle, statuses: ["AWAITING_REVIEW", "DONE"] },
     ];
 
     const getStepState = (step, idx) => {
-        const currentStatus = processingStatus || status;
-        const isIncluded = step.statuses.includes(currentStatus);
-        const nextStep = steps[idx + 1];
-        const nextActive = nextStep ? nextStep.statuses.includes(currentStatus) : false;
-
+        if (!activeDoc) return "pending";
+        const currentStatus = activeDoc.processingStatus || activeDoc.status;
         if (currentStatus === "DONE" || currentStatus === "AWAITING_REVIEW") return "completed";
-        if (nextActive) return "completed";
-        if (isIncluded && !nextActive) return "active";
+        
+        const currentStepIdx = steps.findIndex(s => s.statuses.includes(currentStatus));
+        if (idx < currentStepIdx) return "completed";
+        if (idx === currentStepIdx) return "active";
         return "pending";
-    };
-
-    const getProcessingSubtext = () => {
-        const currentStatus = processingStatus || status;
-        switch (currentStatus) {
-            case "EXTRACTING_TEXT":
-                return "Extracting text from PDF pages...";
-            case "IDENTIFYING_FORMAT":
-                return "Checking if format exists in database...";
-            case "PARSING_TRANSACTIONS":
-                return "Running extraction pipeline (Code + LLM)...";
-            case "AWAITING_REVIEW":
-                return "Processing complete! Transactions ready for review.";
-            default:
-                return "";
-        }
     };
 
     const onFileChange = async (e) => {
         const selectedFile = e.target.files[0];
         if (!selectedFile) return;
-        if (!selectedFile.name.toLowerCase().endsWith('.pdf')) {
-            setError("Only PDF files are supported.");
-            return;
-        }
-
         setFile(selectedFile);
         setError("");
         setPdfType(null);
         setNeedsPassword(false);
-        setPassword("");
-        setDocumentId(null);
-        setProcessingStatus("");
-
         setStatus("DETECTING");
+
         const formData = new FormData();
         formData.append("file", selectedFile);
-
         try {
             const res = await API.post("/documents/verify-type", formData);
             const type = res.data.pdf_type;
             setPdfType(type);
-
             if (type === "PASSWORD_TEXT_PDF") {
                 setNeedsPassword(true);
                 setStatus("PASSWORD_REQUIRED");
-                setError("This PDF is password-protected. Please enter the password below.");
-            } else if (type === "CORRUPTED_PDF") {
+                setError("Password required.");
+            } else if (type === "CORRUPTED_PDF" || type === "RESTRICTED_PDF") {
                 setStatus("ERROR");
-                setError("This file appears to be corrupted and cannot be processed.");
-            } else if (type === "RESTRICTED_PDF") {
-                setStatus("ERROR");
-                setError("This PDF has restrictions that prevent text extraction.");
+                setError("File is invalid or restricted.");
             } else {
                 setStatus("DETECTED");
             }
         } catch (err) {
             setStatus("ERROR");
-            setError(err.response?.data?.detail || "Failed to detect PDF type.");
+            setError("Detection failed.");
         }
     };
-
-    const [elapsedSeconds, setElapsedSeconds] = useState(0);
-    const elapsedRef = useRef(null);
-    const [parsedType, setParsedType] = useState(null);
 
     const handleUpload = async () => {
         if (!file) return;
-
-        setStatus("UPLOADING");
-        setError("");
-        setProcessingStatus("EXTRACTING_TEXT");
-        setElapsedSeconds(0);
-
-        // Start elapsed-time ticker
-        if (elapsedRef.current) clearInterval(elapsedRef.current);
-        elapsedRef.current = setInterval(() => setElapsedSeconds(s => s + 1), 1000);
-
-        const formData = new FormData();
-        formData.append("file", file);
-        if (password) formData.append("password", password);
-
         try {
-            const res = await API.post("/documents/upload", formData);
-            const docId = res.data.document_id;
-            setDocumentId(docId);
-            setStatus("PROCESSING");
-
-            const pollInterval = setInterval(async () => {
-                try {
-                    const statusRes = await API.get(`/documents/status/${docId}`);
-                    const docStatus = statusRes.data.status;
-                    const docParsedType = statusRes.data.transaction_parsed_type || null;
-                    setProcessingStatus(docStatus);
-                    if (docParsedType) setParsedType(docParsedType);
-
-                    if (docStatus === "AWAITING_REVIEW" || docStatus === "APPROVE" || docStatus === "POSTED") {
-                        clearInterval(pollInterval);
-                        clearInterval(elapsedRef.current);
-                        setStatus("DONE");
-                        fetchData();
-                    } else if (docStatus === "FAILED") {
-                        clearInterval(pollInterval);
-                        clearInterval(elapsedRef.current);
-                        setStatus("ERROR");
-                        setError("Processing failed. The document could not be parsed.");
-                    }
-                } catch {
-                    // Keep polling
-                }
-            }, 2000);
-
-            setTimeout(() => {
-                clearInterval(pollInterval);
-                clearInterval(elapsedRef.current);
-            }, 300000);
-
+            await startExtraction(file, password);
+            fetchData();
         } catch (err) {
-            clearInterval(elapsedRef.current);
-            setStatus("ERROR");
-            setError(err.response?.data?.detail || "Upload failed. Please try again.");
+            setError(err.message || "Upload failed.");
         }
     };
 
-    const isProcessing = ["UPLOADING", "PROCESSING"].includes(status);
-    const showStepper = !["IDLE", "ERROR"].includes(status);
-    const canUpload = file && !isProcessing && (status === "DETECTED" || (status === "PASSWORD_REQUIRED" && password));
-
-    const typeLabel = {
-        TEXT_PDF: "Text-based PDF",
-        PASSWORD_TEXT_PDF: "Password-Protected PDF",
-        SCANNED_PDF: "Scanned/Image PDF",
-        IMAGE_CONVERTED_PDF: "Image-Converted PDF",
-        HYBRID_PDF: "Hybrid PDF (Text + Images)",
-        RESTRICTED_PDF: "Restricted PDF",
-        CORRUPTED_PDF: "Corrupted PDF",
-    };
-
     return (
-        <motion.div
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-        >
+        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
             <div style={{ marginBottom: '2rem' }}>
-                <h2 style={{ fontSize: '1.75rem', fontWeight: 800, color: 'var(--text-primary)' }}>Extract PDF</h2>
+                <h2 style={{ fontSize: '1.75rem', fontWeight: 800, color: 'var(--text-primary)' }}>Extraction Dashboard</h2>
             </div>
 
-            <div className="upload-page-card" style={{ background: 'var(--card-bg)', padding: '2rem', borderRadius: '16px', marginBottom: '2rem' }}>
-                {showStepper && (
-                    <div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem', paddingBottom: '1.5rem', marginBottom: '0rem' }}>
+            <div className="upload-page-card" style={{ background: 'var(--bg-secondary)', padding: '1.5rem', borderRadius: '16px', marginBottom: '2.5rem', border: '1px solid var(--border-color)' }}>
+                {activeDoc && (
+                    <div style={{ marginBottom: '1.5rem' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem', marginBottom: '1.5rem' }}>
                             {steps.map((step, i) => {
                                 const state = getStepState(step, i);
                                 return (
                                     <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 1, position: 'relative' }}>
                                         <div style={{
-                                            width: 32, height: 32, borderRadius: '50%',
+                                            width: 28, height: 28, borderRadius: '50%',
                                             display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                            background: state === 'completed' ? '#27ae60' : state === 'active' ? '#483EA8' : '#f3f4f6',
-                                            color: state === 'pending' ? '#9ca3af' : 'white',
-                                            marginBottom: '0.5rem', zIndex: 1, transition: 'all 0.3s'
+                                            background: state === 'completed' ? '#27ae60' : state === 'active' ? '#483EA8' : 'rgba(0,0,0,0.05)',
+                                            color: state === 'pending' ? 'var(--text-secondary)' : 'white',
+                                            marginBottom: '0.4rem', zIndex: 1, transition: 'all 0.3s'
                                         }}>
-                                            {state === 'completed' ? <CheckCircle size={16} /> :
-                                                state === 'active' ? <Loader2 size={16} className="spin-icon" /> :
-                                                    <step.icon size={16} />}
+                                            {state === 'completed' ? <CheckCircle size={14} /> : state === 'active' ? <Loader2 size={14} className="spin-icon" /> : <step.icon size={14} />}
                                         </div>
-                                        <span style={{ fontSize: '0.65rem', fontWeight: 700, color: 'var(--text-primary)', textAlign: 'center', lineHeight: 1.2 }}>{step.label}</span>
+                                        <span style={{ fontSize: '0.6rem', fontWeight: 700, color: 'var(--text-primary)', textAlign: 'center' }}>{step.label}</span>
                                         {i < steps.length - 1 && (
-                                            <div style={{
-                                                position: 'absolute', top: 16, left: '50%', width: '100%', height: 2,
-                                                background: state === 'completed' ? '#27ae60' : '#e5e7eb', zIndex: 0
-                                            }} />
+                                            <div style={{ position: 'absolute', top: 14, left: '50%', width: '100%', height: 2, background: state === 'completed' ? '#27ae60' : 'rgba(0,0,0,0.05)', zIndex: 0 }} />
                                         )}
                                     </div>
                                 );
                             })}
                         </div>
-                        {isProcessing && (
-                            <CircularProgress
-                                processingStatus={processingStatus}
-                                status={status}
-                                elapsedSeconds={elapsedSeconds}
-                                parsedType={parsedType}
+                        {isExtracting && (
+                            <CircularProgress 
+                                processingStatus={activeDoc.processingStatus} 
+                                status={activeDoc.status} 
+                                elapsedSeconds={activeDoc.elapsedSeconds} 
+                                parsedType={activeDoc.parsedType} 
                             />
+                        )}
+                        {!isExtracting && activeDoc.status === "DONE" && (
+                            <div style={{ textAlign: "center", padding: "1rem", background: "rgba(39, 174, 96, 0.1)", borderRadius: "12px", border: "1px solid rgba(39, 174, 96, 0.2)" }}>
+                                <div style={{ fontWeight: 800, color: "#27ae60" }}>Ready for Review!</div>
+                                <button onClick={() => { navigate(`/review?id=${activeDoc.id}`); clearActiveDoc(); }} style={{ marginTop: "0.5rem", background: "#27ae60", color: "#fff", border: "none", padding: "0.5rem 1rem", borderRadius: "8px", fontWeight: 700, cursor: "pointer" }}>Open Transactions</button>
+                            </div>
                         )}
                     </div>
                 )}
 
-                <div>
-                    <div
-                        className="dropzone"
-                        onClick={() => !isProcessing && fileInputRef.current.click()}
-                        style={{
-                            opacity: isProcessing ? 0.6 : 1,
-                            cursor: isProcessing ? 'default' : 'pointer',
-                            minHeight: '260px',
-                            border: '2px dashed var(--border-color)',
-                            borderRadius: '12px',
-                            display: 'flex',
-                            flexDirection: 'column',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            padding: '2rem'
-                        }}
-                    >
-                        <input
-                            type="file"
-                            hidden
-                            ref={fileInputRef}
-                            onChange={onFileChange}
-                            accept=".pdf"
-                        />
-                        <FileUp size={48} style={{ color: '#483EA8', marginBottom: '1rem' }} />
-                        <div style={{
-                            fontSize: '1rem',
-                            fontWeight: 600,
-                            color: 'var(--text-primary)',
-                            marginBottom: '0.5rem'
-                        }}>
-                            {file ? file.name : <>Drag or <span style={{ color: '#483EA8' }}>upload file</span> here</>}
+                {!isExtracting && (!activeDoc || activeDoc.status !== "DONE") && (
+                    <>
+                        <div className="dropzone" onClick={() => fileInputRef.current.click()} style={{ minHeight: '200px', border: '2px dashed var(--border-color)', borderRadius: '12px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '1.5rem', cursor: 'pointer' }}>
+                            <input type="file" hidden ref={fileInputRef} onChange={onFileChange} accept=".pdf" />
+                            <FileUp size={40} style={{ color: '#483EA8', marginBottom: '0.75rem' }} />
+                            <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{file ? file.name : "Choose PDF Statement"}</div>
+                            <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Maximum 50MB per file</div>
                         </div>
-                        <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Supports PDF files only (Text-based, Password or Scanned)</div>
-                    </div>
 
-                    {pdfType && (
-                        <div style={{
-                            marginTop: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.75rem',
-                            padding: '1rem', borderRadius: '12px', background: '#f0eeff',
-                            border: '1px solid #d8d4f0'
-                        }}>
-                            <Search size={16} color="#483EA8" />
-                            <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#483EA8' }}>
-                                Detected: {typeLabel[pdfType] || pdfType}
-                            </span>
-                        </div>
-                    )}
-
-                    {needsPassword && (
-                        <div style={{ marginTop: '2.5rem', textAlign: 'left' }}>
-                            <label style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '10px' }}>
-                                <Lock size={14} /> Document Password
-                            </label>
-                            <input
-                                type="password"
-                                placeholder="Enter PDF password to unlock extraction..."
-                                value={password}
-                                onChange={(e) => setPassword(e.target.value)}
-                                style={{
-                                    width: '100%',
-                                    padding: '0.75rem',
-                                    background: 'var(--input-bg)',
-                                    border: '1px solid var(--border-color)',
-                                    borderRadius: '8px',
-                                    color: 'var(--text-primary)',
-                                    fontSize: '0.9rem'
-                                }}
-                            />
-                        </div>
-                    )}
-
-                    {error && (
-                        <div style={{
-                            marginTop: '1.5rem', background: '#fdf0ef', border: '1px solid #fbdbd9',
-                            padding: '1rem', borderRadius: '12px', display: 'flex', alignItems: 'center',
-                            gap: '0.75rem', color: '#e74c3c', fontSize: '0.85rem', fontWeight: 600
-                        }}>
-                            <AlertCircle size={18} /> {error}
-                        </div>
-                    )}
-                </div>
-
-                <div style={{ marginTop: '1rem' }}>
-                    <button
-                        disabled={!canUpload}
-                        onClick={handleUpload}
-                        style={{
-                            width: '100%',
-                            height: '56px',
-                            fontSize: '1rem',
-                            borderRadius: '12px',
-                            background: canUpload ? '#483EA8' : '#e5e7eb',
-                            color: canUpload ? 'white' : '#9ca3af',
-                            border: 'none',
-                            fontWeight: 700,
-                            cursor: canUpload ? 'pointer' : 'not-allowed',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            gap: '0.5rem',
-                            transition: 'all 0.2s'
-                        }}
-                    >
-                        {isProcessing ? (
-                            <><Loader2 size={20} className="spin-icon" /> PROCESSING...</>
-                        ) : status === "DONE" ? (
-                            <><CheckCircle size={20} /> COMPLETED</>
-                        ) : (
-                            "UPLOAD & START EXTRACTION"
+                        {needsPassword && (
+                            <div style={{ marginTop: '1.5rem' }}>
+                                <label style={{ fontSize: '0.8rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}><Lock size={12} /> Password</label>
+                                <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} style={{ width: '100%', padding: '0.75rem', background: 'var(--input-bg)', border: '1px solid var(--border-color)', borderRadius: '8px', boxSizing: 'border-box' }} />
+                            </div>
                         )}
-                    </button>
-                </div>
+
+                        {error && <div style={{ marginTop: '1rem', color: '#e74c3c', fontSize: '0.8rem', fontWeight: 600 }}>{error}</div>}
+
+                        <button 
+                            disabled={!file || (needsPassword && !password)} 
+                            onClick={handleUpload}
+                            style={{ width: '100%', height: '52px', marginTop: '1.5rem', borderRadius: '12px', background: (file && (!needsPassword || password)) ? '#483EA8' : '#e5e7eb', color: 'white', border: 'none', fontWeight: 700, cursor: 'pointer' }}
+                        >
+                            START EXTRACTION
+                        </button>
+                    </>
+                )}
             </div>
 
-            {/* Stats Cards Section */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1.5rem', marginBottom: '2rem' }}>
-                {statCards.map((stat, i) => (
-                    <div key={i} style={{
-                        background: 'var(--card-bg)',
-                        borderRadius: '16px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '1.25rem',
-                        padding: '1.5rem',
-                        border: '1px solid var(--border-color)'
-                    }}>
-                        <div style={{ padding: '0.85rem', borderRadius: '14px', background: `${stat.color}12`, color: stat.color }}>
-                            <stat.icon size={26} />
-                        </div>
-                        <div>
-                            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 600 }}>{stat.label}</div>
-                            <div style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--text-primary)' }}>{stat.value}</div>
-                        </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1rem', marginBottom: '2rem' }}>
+                {[{ label: "Total", val: stats.total, icon: FileText, col: "#483EA8" }, { label: "Success", val: stats.parsed, icon: CheckCircle, col: "#27ae60" }, { label: "Failed", val: stats.failed, icon: AlertCircle, col: "#e74c3c" }, { label: "Review", val: stats.pending_review, icon: Clock, col: "#f39c12" }].map((s, i) => (
+                    <div key={i} style={{ background: 'var(--bg-secondary)', borderRadius: '16px', padding: '1.25rem', border: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                        <div style={{ padding: '0.6rem', borderRadius: '10px', background: `${s.col}15`, color: s.col }}><s.icon size={20} /></div>
+                        <div><div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', fontWeight: 600 }}>{s.label}</div><div style={{ fontSize: '1.25rem', fontWeight: 800 }}>{s.val}</div></div>
                     </div>
                 ))}
             </div>
 
-            {/* Sort Dropdown */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+            {/* Sort Dropdown - Left Aligned */}
+            <div style={{ display: 'flex', justifyContent: 'flex-start', alignItems: 'center', marginBottom: '1.5rem' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', position: 'relative' }}>
                     <span style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Sort:</span>
                     <div
@@ -590,13 +288,14 @@ export default function ParsingPage() {
                             position: 'absolute',
                             top: '100%',
                             left: '40px',
-                            background: 'var(--card-bg)',
+                            background: 'var(--bg-secondary)',
                             border: '1px solid var(--border-color)',
                             borderRadius: '8px',
                             boxShadow: '0 10px 25px rgba(0,0,0,0.1)',
                             zIndex: 10,
                             width: '180px',
-                            padding: '0.5rem 0'
+                            padding: '0.5rem 0',
+                            marginTop: '0.5rem'
                         }}>
                             {sortOptions.map(opt => (
                                 <div
@@ -606,7 +305,7 @@ export default function ParsingPage() {
                                         padding: '0.6rem 1rem',
                                         fontSize: '0.8rem',
                                         cursor: 'pointer',
-                                        background: sortOption === opt ? '#f0eeff' : 'transparent',
+                                        background: sortOption === opt ? 'rgba(72, 62, 168, 0.05)' : 'transparent',
                                         color: sortOption === opt ? '#483EA8' : 'var(--text-secondary)',
                                         fontWeight: sortOption === opt ? 700 : 500
                                     }}
@@ -619,127 +318,31 @@ export default function ParsingPage() {
                 </div>
             </div>
 
-            {/* Documents Table */}
-            <div style={{ background: 'var(--card-bg)', borderRadius: '16px', border: '1px solid var(--border-color)', overflow: 'hidden' }}>
-                <div style={{ overflowX: 'auto' }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                        <thead>
-                            <tr style={{ background: 'var(--bg-secondary)' }}>
-                                <th style={{ padding: '1rem 2rem', textAlign: 'left', fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Name</th>
-                                <th style={{ padding: '1rem', textAlign: 'center', fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Documents</th>
-                                <th style={{ padding: '1rem', textAlign: 'center', fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Parsed</th>
-                                <th style={{ padding: '1rem', textAlign: 'center', fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Failed</th>
-                                <th style={{ padding: '1rem', textAlign: 'center', fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Type</th>
-                                <th style={{ padding: '1rem', textAlign: 'center', fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Last activity</th>
-                                <th style={{ padding: '1rem 2rem', textAlign: 'center', fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Actions</th>
+            <div style={{ background: 'var(--bg-secondary)', borderRadius: '16px', border: '1px solid var(--border-color)', overflow: 'hidden' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <thead><tr style={{ background: 'var(--bg-primary)', fontSize: '0.75rem', color: 'var(--text-secondary)' }}><th style={{ padding: '1rem 2rem', textAlign: 'left' }}>File Name</th><th style={{ padding: '1rem' }}>Success</th><th style={{ padding: '1rem' }}>Type</th><th style={{ padding: '1rem' }}>Activity</th><th style={{ padding: '1rem 2rem' }}>Actions</th></tr></thead>
+                    <tbody>
+                        {isLoading ? <tr><td colSpan="5" style={{ textAlign: 'center', padding: '2rem' }}><Loader2 className="spin-icon" size={24} color="#483EA8" /></td></tr> : sortedDocs.map(doc => (
+                            <tr key={doc.document_id} style={{ borderTop: '1px solid var(--border-color)', fontSize: '0.9rem' }}>
+                                <td style={{ padding: '1rem 2rem' }}><div><b>{doc.file_name}</b></div><div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{doc.institution_name || 'Generic PDF'}</div></td>
+                                <td style={{ textAlign: 'center' }}>
+                                    <span style={{
+                                        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                                        width: '24px', height: '24px', borderRadius: '50%',
+                                        background: doc.status === 'APPROVE' ? '#def7ec' : '#f3f4f6',
+                                        color: doc.status === 'APPROVE' ? '#03543f' : '#9ca3af',
+                                        fontSize: '0.75rem', fontWeight: 700
+                                    }}>
+                                        {doc.status === 'APPROVE' ? '1' : '0'}
+                                    </span>
+                                </td>
+                                <td style={{ textAlign: 'center' }}><span style={{ background: '#fef3c7', color: '#92400e', padding: '2px 8px', borderRadius: '20px', fontSize: '0.7rem', fontWeight: 800 }}>{doc.transaction_parsed_type || 'CODE'}</span></td>
+                                <td style={{ textAlign: 'center', fontSize: '0.8rem' }}>{new Date(doc.created_at).toLocaleDateString()}</td>
+                                <td style={{ textAlign: 'center', padding: '1rem 2rem' }}><div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'center' }}><button onClick={() => navigate(`/review?id=${doc.document_id}`)} style={{ background: 'none', border: '1px solid var(--border-color)', padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem', color: '#483EA8', fontWeight: 600, cursor: 'pointer' }}><TableIcon size={12} style={{ marginRight: '4px' }} /> Transactions</button><button onClick={() => handleDeleteDocument(doc.document_id, doc.file_name)} style={{ background: 'none', border: '1px solid #fecaca', padding: '4px 8px', borderRadius: '6px', color: '#e74c3c', cursor: 'pointer' }}><Trash2 size={12} /></button></div></td>
                             </tr>
-                        </thead>
-                        <tbody>
-                            {isLoading ? (
-                                <tr>
-                                    <td colSpan="7" style={{ textAlign: 'center', padding: '3rem' }}>
-                                        <Loader2 size={24} color="#483EA8" className="spin-icon" style={{ display: 'inline-block' }} />
-                                    </td>
-                                </tr>
-                            ) : sortedDocs.length === 0 ? (
-                                <tr>
-                                    <td colSpan="7" style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-secondary)' }}>
-                                        No documents found.
-                                    </td>
-                                </tr>
-                            ) : (
-                                sortedDocs.map((doc) => (
-                                    <tr key={doc.document_id} style={{ borderTop: '1px solid var(--border-color)' }}>
-                                        <td style={{ padding: '1.25rem 2rem' }}>
-                                            <div style={{ fontWeight: 700, color: 'var(--text-primary)', fontSize: '0.9rem' }}>{doc.file_name}</div>
-                                            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
-                                                {doc.institution_name || 'Bank Statement'}
-                                            </div>
-                                        </td>
-                                        <td style={{ textAlign: 'center', fontWeight: 600, color: 'var(--text-primary)' }}>1</td>
-                                        <td style={{ textAlign: 'center' }}>
-                                            <span style={{
-                                                display: 'inline-flex',
-                                                alignItems: 'center',
-                                                justifyContent: 'center',
-                                                width: '24px',
-                                                height: '24px',
-                                                borderRadius: '50%',
-                                                background: doc.status === 'APPROVE' ? '#def7ec' : '#f3f4f6',
-                                                color: doc.status === 'APPROVE' ? '#03543f' : '#9ca3af',
-                                                fontSize: '0.75rem',
-                                                fontWeight: 700
-                                            }}>
-                                                {doc.status === 'APPROVE' ? '1' : '0'}
-                                            </span>
-                                        </td>
-                                        <td style={{ textAlign: 'center', color: '#9ca3af' }}>
-                                            {doc.status === 'FAILED' ? '1' : '-'}
-                                        </td>
-                                        <td style={{ textAlign: 'center' }}>
-                                            <span style={{
-                                                background: '#fef3c7',
-                                                color: '#92400e',
-                                                padding: '2px 10px',
-                                                borderRadius: '50px',
-                                                fontSize: '0.65rem',
-                                                fontWeight: 800,
-                                                textTransform: 'uppercase'
-                                            }}>
-                                                {doc.transaction_parsed_type === 'LLM' ? 'AI' : doc.transaction_parsed_type || 'N/A'}
-                                            </span>
-                                        </td>
-                                        <td style={{ textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
-                                            {formatTime(doc.created_at)}
-                                        </td>
-                                        <td style={{ textAlign: 'center', padding: '1.25rem 2rem' }}>
-                                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}>
-                                                <button
-                                                    onClick={() => navigate(`/review?id=${doc.document_id}`)}
-                                                    style={{
-                                                        background: 'none',
-                                                        border: '1px solid var(--border-color)',
-                                                        padding: '6px 12px',
-                                                        borderRadius: '6px',
-                                                        fontSize: '0.75rem',
-                                                        fontWeight: 600,
-                                                        color: '#483EA8',
-                                                        display: 'inline-flex',
-                                                        alignItems: 'center',
-                                                        gap: '4px',
-                                                        cursor: 'pointer',
-                                                        transition: 'all 0.2s'
-                                                    }}
-                                                >
-                                                    <TableIcon size={14} /> Transactions
-                                                </button>
-                                                <button
-                                                    onClick={() => handleDeleteDocument(doc.document_id, doc.file_name)}
-                                                    title="Delete document"
-                                                    style={{
-                                                        background: 'none',
-                                                        border: '1px solid #fecaca',
-                                                        padding: '6px 8px',
-                                                        borderRadius: '6px',
-                                                        fontSize: '0.75rem',
-                                                        fontWeight: 600,
-                                                        color: '#e74c3c',
-                                                        display: 'inline-flex',
-                                                        alignItems: 'center',
-                                                        cursor: 'pointer',
-                                                        transition: 'all 0.2s'
-                                                    }}
-                                                >
-                                                    <Trash2 size={14} />
-                                                </button>
-                                            </div>
-                                        </td>
-                                    </tr>
-                                ))
-                            )}
-                        </tbody>
-                    </table>
-                </div>
+                        ))}
+                    </tbody>
+                </table>
             </div>
         </motion.div>
     );

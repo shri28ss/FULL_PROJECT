@@ -1,15 +1,16 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';  // ← ADD
+import { useNavigate, useLocation } from 'react-router-dom';
+import { useParsing } from '../context/ParsingContext';
 import '../styles/Sidebar.css';
 import { ICONS } from './Icons';
 
 const Sidebar = ({
   isExpanded, onToggleExpand,
   user, toggleTheme, isDarkMode, onLogout, onOpenSettings
-  // ↑ activePage and onPageChange REMOVED — location drives active state now
 }) => {
-  const navigate = useNavigate();       // ← ADD
-  const location = useLocation();       // ← ADD
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { activeDoc, latestFinishedDocId } = useParsing();
   const [showPopup, setShowPopup] = useState(false);
   const popupRef = useRef(null);
 
@@ -37,18 +38,29 @@ const Sidebar = ({
 
   const getFullName = () => user?.user_metadata?.full_name || user?.email?.split('@')[0] || 'User';
 
-  // ← path replaces id; isActive uses location.pathname
   const menuItems = [
     { path: '/',             label: 'Overview',      icon: <ICONS.Dashboard /> },
     { path: '/transactions', label: 'Transactions',  icon: <ICONS.Transactions /> },
     { path: '/accounts',     label: 'Accounts',      icon: <ICONS.Accounts /> },
     { path: '/analytics',    label: 'Analytics',     icon: <ICONS.Analytics /> },
     { path: '/parsing',      label: 'Parsing',       icon: <ICONS.Dashboard /> },
-    { path: '/review',       label: 'Review',        icon: <ICONS.Transactions /> },
   ];
 
-  const isActive = (path) =>
-    path === '/' ? location.pathname === '/' : location.pathname.startsWith(path);
+  // Show "Review" only if there is a document in context
+  const currentDocId = latestFinishedDocId || activeDoc?.id;
+  if (currentDocId) {
+    menuItems.push({ 
+        path: `/review?id=${currentDocId}`, 
+        label: 'Review', 
+        icon: <ICONS.Transactions />,
+        isReview: true 
+    });
+  }
+
+  const isActive = (path) => {
+    if (path.startsWith('/review')) return location.pathname.startsWith('/review');
+    return path === '/' ? location.pathname === '/' : location.pathname.startsWith(path);
+  };
 
   return (
     <div className={`sidebar-container ${isExpanded ? 'expanded' : 'collapsed'}`}>
@@ -70,7 +82,7 @@ const Sidebar = ({
           <button
             key={item.path}
             className={`nav-item ${isActive(item.path) ? 'active' : ''}`}
-            onClick={() => navigate(item.path)}   // ← navigate() replaces onPageChange
+            onClick={() => navigate(item.path)}
           >
             <span className="nav-icon">{item.icon}</span>
             {isExpanded && <span className="nav-label">{item.label}</span>}
@@ -97,7 +109,7 @@ const Sidebar = ({
         )}
 
         <button
-          className="nav-item footer-item profile-item"   // ← removed activePage check (profile is never a route)
+          className="nav-item footer-item profile-item"
           onClick={() => setShowPopup(!showPopup)}
         >
           <div className="profile-icon">{getInitials()}</div>

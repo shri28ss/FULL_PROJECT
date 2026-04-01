@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from './shared/hooks/useAuth';
 import { useRole } from './context/RoleContext';
 import { supabase, supabaseConfigError } from './shared/supabase';
+import { ParsingProvider } from './context/ParsingContext';
 
 // Pages & Components
 import AuthPage from './components/AuthPage';
@@ -58,7 +59,6 @@ function App() {
     }
 
     try {
-      // Skip role check here since it's now handled by RoleContext
       if (role === 'QC' || role === 'ADMIN') {
          setLoading(false);
          return;
@@ -88,7 +88,6 @@ function App() {
       }
     } catch (err) {
       console.error('Error checking setup status:', err);
-      // Fallback
       setHasModules(false);
       setHasIdentifiers(false);
     } finally {
@@ -103,23 +102,11 @@ function App() {
 
   if (supabaseConfigError) {
     return (
-      <div
-        style={{
-          minHeight: '100vh',
-          display: 'grid',
-          placeItems: 'center',
-          backgroundColor: '#0f172a',
-          color: '#e2e8f0',
-          fontFamily: 'Inter, sans-serif',
-          padding: '24px',
-        }}
-      >
+      <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', backgroundColor: '#0f172a', color: '#e2e8f0', fontFamily: 'Inter, sans-serif', padding: '24px' }}>
         <div style={{ maxWidth: '760px', width: '100%', lineHeight: 1.6 }}>
           <h1 style={{ margin: '0 0 8px 0', fontSize: '1.5rem' }}>Configuration Required</h1>
           <p style={{ margin: '0 0 12px 0', color: '#cbd5e1' }}>{supabaseConfigError}</p>
-          <p style={{ margin: 0, color: '#94a3b8' }}>
-            Update frontend-web/.env, then restart the Vite dev server.
-          </p>
+          <p style={{ margin: 0, color: '#94a3b8' }}>Update frontend-web/.env, then restart the Vite dev server.</p>
         </div>
       </div>
     );
@@ -127,16 +114,7 @@ function App() {
 
   if (authLoading || (user && loading)) {
     return (
-      <div
-        style={{
-          height: '100vh',
-          display: 'grid',
-          placeItems: 'center',
-          backgroundColor: 'var(--bg-primary, #0f172a)',
-          color: 'var(--text-primary, #e2e8f0)',
-          fontFamily: 'Inter, sans-serif',
-        }}
-      >
+      <div style={{ height: '100vh', display: 'grid', placeItems: 'center', backgroundColor: 'var(--bg-primary, #0f172a)', color: 'var(--text-primary, #e2e8f0)', fontFamily: 'Inter, sans-serif' }}>
         Initializing LedgerAI...
       </div>
     );
@@ -144,14 +122,13 @@ function App() {
 
   return (
     <BrowserRouter>
-       <Routes>
-          {/* Public Auth Zone */}
+      <ParsingProvider>
+        <Routes>
           <Route path="/auth" element={user ? <Navigate to={(role === 'QC' || role === 'ADMIN') ? '/qc' : '/'} replace /> : <AuthLayout />}>
              <Route index element={<AuthPage toggleTheme={toggleTheme} isDarkMode={isDarkMode} />} />
              <Route path="login" element={<AuthPage toggleTheme={toggleTheme} isDarkMode={isDarkMode} />} />
           </Route>
 
-          {/* QC Panel Zone */}
           <Route path="/qc" element={
               <ProtectedRoute allowedRoles={['QC', 'ADMIN']}>
                  <QCLayout user={user} toggleTheme={toggleTheme} isDarkMode={isDarkMode} />
@@ -160,7 +137,6 @@ function App() {
              <Route index element={<QCPanel user={user} toggleTheme={toggleTheme} isDarkMode={isDarkMode} />} />
           </Route>
 
-          {/* Standard App Zone with setup sub-state takeovers */}
           <Route path="/" element={
               <ProtectedRoute allowedRoles={['USER']}>
                  {hasModules === false ? (
@@ -180,9 +156,9 @@ function App() {
                <Route path="review" element={<ReviewPage />} />
           </Route>
 
-          {/* Catch-All / Redirect */}
           <Route path="*" element={<Navigate to={user ? (role === 'QC' ? '/qc' : '/') : '/auth'} replace />} />
-       </Routes>
+        </Routes>
+      </ParsingProvider>
     </BrowserRouter>
   );
 }
