@@ -49,8 +49,11 @@ const AddAccountModal = ({ onClose, onCreated }) => {
     if (!form.parent_account_id) return null;
     const parent = accounts.find(a => a.account_id === parseInt(form.parent_account_id));
     if (!parent) return null;
+    if (parent.account_name === 'Credit Cards') {
+      setForm(prev => ({ ...prev, balance_nature: 'DEBIT' }));
+      return 'CREDIT_CARD';
+    }
     if (parent.account_name === 'Bank Accounts') return 'BANK';
-    if (parent.account_name === 'Credit Cards') return 'CREDIT_CARD';
     if (parent.account_name === 'Digital Wallets') return 'CASH_WALLET';
     return null;
   };

@@ -68,6 +68,7 @@ const Transactions = () => {
   const { toasts, showToast } = useToast();
   const [isUploadOpen, setIsUploadOpen] = useState(false);
   const [isCategorizing, setIsCategorizing] = useState(false);
+  const [categoriseStatus, setCategoriseStatus] = useState('');
   const [isApprovingBulk, setIsApprovingBulk] = useState(false);
   const [transactions, setTransactions] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -243,12 +244,15 @@ const Transactions = () => {
   };
 
   const handleCategorize = async () => {
-    const uncategorizedItems = transactions.filter(txn => !(txn.transactions && txn.transactions.length > 0));
+    const uncategorizedItems = transactions.filter(
+      txn => !(txn.transactions && txn.transactions.length > 0)
+    );
     if (uncategorizedItems.length === 0) {
       showToast('All transactions are already categorised!', 'success');
       return;
     }
     setIsCategorizing(true);
+    setCategoriseStatus('Starting…');
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const response = await fetch(`${API_BASE_URL}/api/transactions/categorize-bulk`, {
@@ -259,17 +263,39 @@ const Transactions = () => {
         },
         body: JSON.stringify({ transactions: uncategorizedItems })
       });
-      if (response.ok) {
-        showToast('✅ Bulk categorize success!', 'success');
-        fetchTransactions(activeFilter, true);
-      } else {
-        showToast('Bulk categorization failed', 'error');
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const payload = JSON.parse(line.slice(6));
+            if (payload.message) setCategoriseStatus(payload.message);
+            if (payload.done) {
+              showToast('✅ Bulk categorise success!', 'success');
+              fetchTransactions(activeFilter, true);
+            }
+            if (payload.error) {
+              showToast('Bulk categorisation failed', 'error');
+            }
+          } catch {}
+        }
       }
     } catch (err) {
       console.error('Categorise failed:', err);
-      showToast('Failed to categorize transactions', 'error');
+      showToast('Failed to categorise transactions', 'error');
     } finally {
       setIsCategorizing(false);
+      setCategoriseStatus('');
     }
   };
 
@@ -374,6 +400,7 @@ const Transactions = () => {
         ...txn.transactions[0],
         offset_account_id: selectedAccount.account_id,
         accounts: { account_name: selectedAccount.account_name },
+        categorised_by: 'MANUAL',
         review_status: 'PENDING',
         is_uncategorised: false,
       }]
@@ -596,6 +623,14 @@ const Transactions = () => {
     );
   };
 
+  const allCount = transactions.length;
+  const pendingCatCount = transactions.filter(t =>
+    !(t.transactions && t.transactions.length > 0)
+  ).length;
+  const pendingAppCount = transactions.filter(t =>
+    t.transactions?.[0]?.review_status === 'PENDING'
+  ).length;
+
   return (
     <div className="transactions-container">
       <div className="page-header">
@@ -611,22 +646,29 @@ const Transactions = () => {
           >
             <ICONS.Upload /> Upload
           </button>
-          <button
-            className="action-btn"
-            onClick={handleCategorize}
-            disabled={isCategorizing}
-            style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
-          >
-            <ICONS.Robot /> {isCategorizing ? 'Categorising...' : 'Categorise'}
-          </button>
-          <button
-            className={`action-btn approve-selected ${selectedIds.size > 0 ? 'has-selection' : ''}`}
-            onClick={handleBulkApprove}
-            disabled={selectedIds.size === 0 || isApprovingBulk}
-            style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
-          >
-            <ICONS.Check /> Approve Selected ({selectedIds.size})
-          </button>
+          {activeFilter === 'PENDING_APP' ? (
+            <button
+              className={`action-btn approve-selected ${selectedIds.size > 0 ? 'has-selection' : ''}`}
+              onClick={handleBulkApprove}
+              disabled={selectedIds.size === 0 || isApprovingBulk}
+              style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+            >
+              {isApprovingBulk ? <span className="spinner-small"></span> : <ICONS.Check />}
+              {isApprovingBulk ? `Approving ${selectedIds.size}...` : `Approve Selected (${selectedIds.size})`}
+            </button>
+          ) : (
+            <button
+              className={`action-btn ${isCategorizing ? 'categorising' : ''}`}
+              onClick={handleCategorize}
+              disabled={isCategorizing}
+              style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+            >
+              {isCategorizing
+                ? <><span className="spinner-small"></span> {categoriseStatus || 'Categorising…'}</>
+                : <><ICONS.Robot /> Categorise</>
+              }
+            </button>
+          )}
         </div>
       </div>
 
@@ -634,15 +676,15 @@ const Transactions = () => {
         <button
           className={`filter-tab ${activeFilter === 'ALL' ? 'active' : ''}`}
           onClick={() => handleFilterChange('ALL')}
-        >All</button>
+        >All {allCount > 0 && <span className="filter-count-badge">{allCount}</span>}</button>
         <button
           className={`filter-tab ${activeFilter === 'PENDING_CAT' ? 'active' : ''}`}
           onClick={() => handleFilterChange('PENDING_CAT')}
-        >Pending Categorisation</button>
+        >Pending Categorisation {pendingCatCount > 0 && <span className="filter-count-badge">{pendingCatCount}</span>}</button>
         <button
           className={`filter-tab ${activeFilter === 'PENDING_APP' ? 'active' : ''}`}
           onClick={() => handleFilterChange('PENDING_APP')}
-        >Pending Approval</button>
+        >Pending Approval {pendingAppCount > 0 && <span className="filter-count-badge">{pendingAppCount}</span>}</button>
 
         {/* ── Filter popup ── pushed to the right */}
         <div className="filter-popup-wrapper" ref={filterRef} style={{ marginLeft: 'auto' }}>
@@ -754,7 +796,10 @@ const Transactions = () => {
                           const categorisedBy = txn.transactions[0].categorised_by || '-';
 
                           return (
-                            <div key={txn.uncategorized_transaction_id} className="table-row grouped">
+                            <div
+                              key={txn.uncategorized_transaction_id}
+                              className={`table-row grouped ${isApprovingBulk && selectedIds.has(txn.transactions[0].transaction_id) ? 'row-approving' : ''}`}
+                            >
                               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                                 <input
                                   type="checkbox"
@@ -856,7 +901,7 @@ const Transactions = () => {
                     return (
                       <div
                         key={txn.uncategorized_transaction_id}
-                        className="table-row"
+                        className={`table-row ${isApprovingBulk && selectedIds.has(transactionId) ? 'row-approving' : ''}`}
                         style={{
                           gridTemplateColumns: activeFilter === 'PENDING_CAT'
                             ? '110px 1fr 110px 150px 160px'

@@ -123,7 +123,7 @@ const SetupAccounts = ({ onSetupAccountsComplete }) => {
             user_id: user.id,
             account_name: accName,
             account_type: isCredit ? 'LIABILITY' : 'ASSET', // CCs are usually liability
-            balance_nature: isCredit ? 'CREDIT' : 'DEBIT',
+            balance_nature: 'DEBIT',
             is_system_generated: false,
             parent_account_id: parentAccountId
           }])

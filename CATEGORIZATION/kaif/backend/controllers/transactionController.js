@@ -3,6 +3,43 @@ const { upsertExactCache, upsertVectorCache, isGarbage } = require('../services/
 const rulesEngineService = require('../services/rulesEngineService');
 
 /**
+ * Helper to build ledger entries for an approved transaction.
+ * Returns an array of objects to be inserted into 'ledger_entries'.
+ */
+function buildLedgerRows(txn, userId) {
+  const { transaction_id, base_account_id, offset_account_id, amount, transaction_type, transaction_date, is_contra } = txn;
+
+  // For a contra, skip the mirror CREDIT leg
+  if (is_contra && transaction_type === 'CREDIT') {
+    return [];
+  }
+
+  if (!transaction_id || !base_account_id || !offset_account_id || !amount) {
+    console.warn(`⚠️ Missing required fields for txn ${transaction_id}`);
+    return [];
+  }
+
+  const entries = transaction_type === 'DEBIT'
+    ? [
+        { account_id: offset_account_id, debit_amount: amount,  credit_amount: 0 },
+        { account_id: base_account_id,   debit_amount: 0,        credit_amount: amount }
+      ]
+    : [
+        { account_id: base_account_id,   debit_amount: amount,  credit_amount: 0 },
+        { account_id: offset_account_id, debit_amount: 0,        credit_amount: amount }
+      ];
+
+  return entries.map(e => ({
+    transaction_id,
+    account_id: e.account_id,
+    debit_amount: e.debit_amount,
+    credit_amount: e.credit_amount,
+    entry_date: transaction_date,
+    user_id: userId
+  }));
+}
+
+/**
  * Creates double-entry ledger entries for an approved transaction.
  * Every transaction produces exactly 2 ledger entries.
  * 
@@ -15,39 +52,17 @@ const rulesEngineService = require('../services/rulesEngineService');
  *   - CREDIT the offset account (income goes up)
  */
 async function createLedgerEntries(transactionId, baseAccountId, offsetAccountId, amount, transactionType, transactionDate, isContra, userId) {
-  // Contra transactions represent internal transfers between two bank accounts.
-  // Both legs (DEBIT side A, CREDIT side B) are stored as separate transactions,
-  // but they describe the same money movement. To avoid double-counting in the
-  // ledger, we only write entries for the DEBIT leg (money leaving the source
-  // account). The CREDIT leg is the mirror and would produce identical entries.
-  if (isContra && transactionType === 'CREDIT') {
-    console.log(`⏭️  Skipping ledger entries for contra CREDIT leg (mirror) txn ${transactionId}`);
-    return;
-  }
-
-  if (!transactionId || !baseAccountId || !offsetAccountId || !amount) {
-    console.warn(`⚠️ Skipping ledger entries for txn ${transactionId}: missing required fields`);
-    return;
-  }
-
-  const entries = transactionType === 'DEBIT'
-    ? [
-        { account_id: offsetAccountId, debit_amount: amount,  credit_amount: 0 },
-        { account_id: baseAccountId,   debit_amount: 0,        credit_amount: amount }
-      ]
-    : [
-        { account_id: baseAccountId,   debit_amount: amount,  credit_amount: 0 },
-        { account_id: offsetAccountId, debit_amount: 0,        credit_amount: amount }
-      ];
-
-  const rows = entries.map(e => ({
+  const rows = buildLedgerRows({
     transaction_id: transactionId,
-    account_id: e.account_id,
-    debit_amount: e.debit_amount,
-    credit_amount: e.credit_amount,
-    entry_date: transactionDate,
-    user_id: userId
-  }));
+    base_account_id: baseAccountId,
+    offset_account_id: offsetAccountId,
+    amount,
+    transaction_type: transactionType,
+    transaction_date: transactionDate,
+    is_contra: isContra
+  }, userId);
+
+  if (rows.length === 0) return;
 
   const { error } = await supabase.from('ledger_entries').insert(rows);
   if (error) {
@@ -170,39 +185,45 @@ async function approveTransaction(req, res) {
       return res.status(500).json({ error: 'Failed to approve transaction.' });
     }
 
-    // Fetch the transaction to get fields needed for ledger entries
-    const { data: txnData } = await supabase
-      .from('transactions')
-      .select('transaction_id, base_account_id, offset_account_id, amount, transaction_type, transaction_date, is_contra, details, clean_merchant_name, extracted_id')
-      .eq('transaction_id', transactionId)
-      .eq('user_id', userId)
-      .single();
+    // Phase 1 Response — return early
+    res.status(200).json({ success: true });
 
-    if (txnData) {
-      await createLedgerEntries(
-        txnData.transaction_id,
-        txnData.base_account_id,
-        txnData.offset_account_id,
-        txnData.amount,
-        txnData.transaction_type,
-        txnData.transaction_date,
-        txnData.is_contra || false,
-        userId
-      );
+    // Phase 2: Background processing (Ledger entries + Caching)
+    setImmediate(async () => {
+      try {
+        const { data: txnData } = await supabase
+          .from('transactions')
+          .select('transaction_id, base_account_id, offset_account_id, amount, transaction_type, transaction_date, is_contra, details, clean_merchant_name, extracted_id')
+          .eq('transaction_id', transactionId)
+          .eq('user_id', userId)
+          .single();
 
-      if (txnData && !txnData.is_contra) {
-        if (txnData.extracted_id) {
-          // Rules engine already extracted a clean VPA/ID — goes to exact cache
-          await upsertExactCache(userId, txnData.extracted_id, txnData.offset_account_id);
-        } else {
-          // No extraction happened — raw details is a real merchant name, vector cache it
-          const nameToCache = txnData.clean_merchant_name || txnData.details;
-          await upsertVectorCache(userId, nameToCache, txnData.offset_account_id);
+        if (txnData) {
+          await createLedgerEntries(
+            txnData.transaction_id,
+            txnData.base_account_id,
+            txnData.offset_account_id,
+            txnData.amount,
+            txnData.transaction_type,
+            txnData.transaction_date,
+            txnData.is_contra || false,
+            userId
+          );
+
+          if (!txnData.is_contra) {
+            if (txnData.extracted_id) {
+              await upsertExactCache(userId, txnData.extracted_id, txnData.offset_account_id);
+            } else {
+              const nameToCache = txnData.clean_merchant_name || txnData.details;
+              await upsertVectorCache(userId, nameToCache, txnData.offset_account_id);
+            }
+          }
         }
+      } catch (bgError) {
+        console.error(`❌ Background processing failed for txn ${transactionId}:`, bgError);
       }
-    }
+    });
 
-    return res.status(200).json({ success: true });
   } catch (err) {
     console.error('Unexpected error in approveTransaction:', err);
     return res.status(500).json({ error: 'Internal server error.' });
@@ -260,7 +281,7 @@ async function bulkApproveTransactions(req, res) {
       })
       .in('transaction_id', approvableIds)
       .eq('user_id', userId)
-      .select('transaction_id'); // To verify the count
+      .select('transaction_id');
 
     if (error) {
       if (error.code === '23505') {
@@ -272,56 +293,64 @@ async function bulkApproveTransactions(req, res) {
       return res.status(500).json({ error: 'Failed to approve transactions.' });
     }
 
-    // Fetch all approved transactions to create ledger entries
-    if (data && data.length > 0) {
-      const approvedIds = data.map(t => t.transaction_id);
-      const { data: txnRows } = await supabase
-        .from('transactions')
-        .select('transaction_id, base_account_id, offset_account_id, amount, transaction_type, transaction_date, details, clean_merchant_name, is_contra, extracted_id')
-        .in('transaction_id', approvedIds)
-        .eq('user_id', userId);
-
-      if (txnRows) {
-        for (const txn of txnRows) {
-          await createLedgerEntries(
-            txn.transaction_id,
-            txn.base_account_id,
-            txn.offset_account_id,
-            txn.amount,
-            txn.transaction_type,
-            txn.transaction_date,
-            txn.is_contra || false,
-            userId
-          );
-
-          if (!txn.is_contra) {
-            if (txn.extracted_id) {
-              // Rules engine already extracted a clean VPA/ID — goes to exact cache
-              await upsertExactCache(userId, txn.extracted_id, txn.offset_account_id);
-            } else {
-              // No extraction happened — raw details is a real merchant name, vector cache it
-              const nameToCache = txn.clean_merchant_name || txn.details;
-              await upsertVectorCache(userId, nameToCache, txn.offset_account_id);
-            }
-          }
-        }
-      }
-    }
-
     const approvedCount = data ? data.length : 0;
     const blockedCount = blockedIds.length;
 
+    // Phase 1 Response — respond immediately after update succeeds
     if (blockedCount > 0) {
-      return res.status(200).json({
+      res.status(200).json({
         success: true,
         approved_count: approvedCount,
         blocked_count: blockedCount,
         blocked_transaction_ids: blockedIds,
         message: `${approvedCount} transactions approved. ${blockedCount} transactions require categorisation.`
       });
+    } else {
+      res.status(200).json({ success: true, approved_count: approvedCount });
     }
 
-    return res.status(200).json({ success: true, approved_count: approvedCount });
+    // Phase 2: Background processing
+    const approvedIds = data ? data.map(t => t.transaction_id) : [];
+    if (approvedIds.length > 0) {
+      setImmediate(async () => {
+        try {
+          const { data: txnRows } = await supabase
+            .from('transactions')
+            .select('transaction_id, base_account_id, offset_account_id, amount, transaction_type, transaction_date, details, clean_merchant_name, is_contra, extracted_id')
+            .in('transaction_id', approvedIds)
+            .eq('user_id', userId);
+
+          if (!txnRows || txnRows.length === 0) return;
+
+          // Build ALL ledger entries rows in one pass
+          const allLedgerRows = [];
+          for (const txn of txnRows) {
+            const entries = buildLedgerRows(txn, userId);
+            allLedgerRows.push(...entries);
+          }
+
+          // Insert ALL ledger rows in a single supabase call
+          if (allLedgerRows.length > 0) {
+            const { error: ledgerError } = await supabase.from('ledger_entries').insert(allLedgerRows);
+            if (ledgerError) console.error('Background bulk ledger insert failed:', ledgerError);
+          }
+
+          // Run all cache upserts in parallel
+          await Promise.all(txnRows.map(txn => {
+            if (txn.is_contra) return Promise.resolve();
+            if (txn.extracted_id) {
+              return upsertExactCache(userId, txn.extracted_id, txn.offset_account_id);
+            }
+            const name = txn.clean_merchant_name || txn.details;
+            return upsertVectorCache(userId, name, txn.offset_account_id);
+          }));
+
+          console.log(`✅ Background bulk approval complete for ${txnRows.length} transactions`);
+        } catch (bgError) {
+          console.error('❌ Background bulk approve processing failed:', bgError);
+        }
+      });
+    }
   } catch (err) {
     console.error('Unexpected error in bulkApproveTransactions:', err);
     return res.status(500).json({ error: 'Internal server error.' });

@@ -46,6 +46,11 @@
   transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
+.action-btn.categorising {
+  min-width: 220px;
+  justify-content: center;
+}
+
 .action-btn:hover {
   background: rgba(127, 175, 138, 0.05);
   border-color: var(--accent-color);
@@ -653,4 +658,14 @@
   font-size: 13px;
   color: var(--text-secondary);
   margin: 0;
+}
+
+.row-approving {
+  opacity: 0.5;
+  animation: pulse 1s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 0.25; }
 }

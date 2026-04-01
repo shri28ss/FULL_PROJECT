@@ -46,7 +46,7 @@ BEGIN
     RETURNING template_id INTO v_parent_id;
 
     INSERT INTO public.coa_templates (module_id, account_name, account_type, balance_nature, is_system_generated, parent_template_id) VALUES
-    (v_core_id, 'Credit Cards', 'LIABILITY', 'CREDIT', TRUE, v_parent_id),
+    (v_core_id, 'Credit Cards', 'LIABILITY', 'DEBIT', TRUE, v_parent_id),
     (v_core_id, 'Short-Term Borrowings', 'LIABILITY', 'CREDIT', FALSE, v_parent_id),
     (v_core_id, 'Utility Bills Payable', 'LIABILITY', 'CREDIT', FALSE, v_parent_id);
 

@@ -18,8 +18,17 @@ const ML_SERVICE_URL = process.env.ML_SERVICE_URL || `http://127.0.0.1:${process
  * Pipeline stages write category results to offset_account_id.
  * account_id is never overwritten so the source account is always preserved.
  */
-async function processUpload(req, res) {
+async function processUploadSSE(req, res) {
   try {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders();
+
+    const emit = (message, stage) => {
+      res.write(`data: ${JSON.stringify({ message, stage })}\n\n`);
+    };
+
     logger.info('Categorization request received', {
       transactionCount: req.body?.transactions?.length,
       userId: req.user?.id
@@ -29,13 +38,19 @@ async function processUpload(req, res) {
 
     if (!transactions || !Array.isArray(transactions)) {
       logger.warn('Invalid payload received', { hasTransactions: !!transactions, isArray: Array.isArray(transactions) });
-      return res.status(400).json({ error: 'Invalid payload: Expecting an array of transactions.' });
+      emit('Something went wrong', 'error');
+      res.write(`data: ${JSON.stringify({ error: true })}\n\n`);
+      res.end();
+      return;
     }
 
     const userId = req.user?.id;
     if (!userId) {
       logger.error('User authentication missing');
-      return res.status(401).json({ error: 'User authenticated reference missing.' });
+      emit('Something went wrong', 'error');
+      res.write(`data: ${JSON.stringify({ error: true })}\n\n`);
+      res.end();
+      return;
     }
 
     // ==========================================
@@ -57,7 +72,10 @@ async function processUpload(req, res) {
 
     if (!uncategorisedExpenseId || !uncategorisedIncomeId) {
       logger.error('Fallback accounts not found', { userId });
-      return res.status(500).json({ error: 'System fallback accounts missing. Please contact support.' });
+      emit('Something went wrong', 'error');
+      res.write(`data: ${JSON.stringify({ error: true })}\n\n`);
+      res.end();
+      return;
     }
 
     logger.info('Starting categorization pipeline', {
@@ -69,10 +87,13 @@ async function processUpload(req, res) {
     // ==========================================
     // STAGE 0: BATCH CONTRA RADAR (Pre-Loop)
     // ==========================================
+    emit('Checking for internal transfers…', 'contra');
     logger.info('Stage 0: Running Contra Radar');
     const resolvedTransactions = await contraRadarService.findAndLinkContras(transactions, userId, supabase);
 
     const finalResults = [];
+
+    emit('Matching known patterns…', 'rules');
 
     for (const txn of resolvedTransactions) {
 
@@ -229,6 +250,7 @@ async function processUpload(req, res) {
       // ==========================================
       // STAGE 3: VECTOR SIMILARITY
       // ==========================================
+      emit('Looking up your categorisation history…', 'vector');
       let vectorMatch = null;
       try {
         const transactionType = txn.debit ? 'DEBIT' : 'CREDIT';
@@ -269,6 +291,7 @@ async function processUpload(req, res) {
     logger.info('Stage 4: LLM Batch Fallback', { leftoverCount: leftovers.length });
 
     if (leftovers.length > 0) {
+      emit(`Asking AI to categorise ${leftovers.length} transactions…`, 'llm');
       // Separate leftovers by transaction type
       const debitLeftovers = leftovers.filter(t => t.debit);
       const creditLeftovers = leftovers.filter(t => t.credit);
@@ -380,6 +403,7 @@ async function processUpload(req, res) {
     // ==========================================
     // STAGE 5: APPLY FALLBACK & BATCH WRITE
     // ==========================================
+    emit('Saving results…', 'saving');
     logger.info('Preparing batch write', {
       totalResults: finalResults.length,
       withBaseAccount: finalResults.filter(item => item.base_account_id).length,
@@ -441,14 +465,17 @@ async function processUpload(req, res) {
 
     logger.info('Categorization complete', { totalResults: finalResults.length });
 
-    return res.status(200).json({
-      success: true,
-      data: finalResults
-    });
+    emit('Done', 'done');
+    res.write(`data: ${JSON.stringify({ done: true, data: finalResults })}\n\n`);
+    res.end();
+    return;
 
   } catch (err) {
     logger.error('Bulk categorization exception', { error: err.message, stack: err.stack });
-    return res.status(500).json({ error: 'Internal Server Error processing batch categorization.' });
+    emit('Something went wrong', 'error');
+    res.write(`data: ${JSON.stringify({ error: true })}\n\n`);
+    res.end();
+    return;
   }
 }
 
@@ -468,5 +495,5 @@ async function getAccountIdFromTemplate(templateId, userId, supabase) {
 }
 
 module.exports = {
-  processUpload
+  processUpload: processUploadSSE
 };
