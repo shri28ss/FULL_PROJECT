@@ -7,6 +7,125 @@ import {
 import API from "../api/api";
 import { useNavigate } from "react-router-dom";
 
+// ── Circular Processing Indicator ────────────────────────────────────────────
+const STAGE_META = {
+    EXTRACTING_TEXT:           { label: "Extracting Text",                    sub: "Reading PDF pages and extracting raw text...",                          color: "#6366f1", pct: 33 },
+    IDENTIFYING_FORMAT:        { label: "Identifying Format",                  sub: "Matching statement format in database...",                               color: "#8b5cf6", pct: 55 },
+    PARSING_TRANSACTIONS:      { label: "Parsing Transactions",                sub: "Running Code + LLM extraction pipeline...",                              color: "#a855f7", pct: 78 },
+    PARSING_TRANSACTIONS_CODE: { label: "Extracting Transactions",             sub: "Format found in DB — using stored extraction logic (fast path)...",      color: "#0d9488", pct: 68 },
+    AWAITING_REVIEW:           { label: "Finalizing",                          sub: "Validating transactions and preparing review...",                        color: "#27ae60", pct: 100 },
+    UPLOADING:                 { label: "Uploading Document",                  sub: "Sending file to processing server...",                                  color: "#483EA8", pct: 10 },
+    PROCESSING:                { label: "Starting Pipeline",                   sub: "Initializing extraction pipeline...",                                   color: "#483EA8", pct: 20 },
+};
+
+function CircularProgress({ processingStatus, status, elapsedSeconds, parsedType }) {
+    let currentKey = processingStatus || status;
+    // When backend is in PARSING_TRANSACTIONS and it already knows the parsed type
+    // is CODE (format was found in DB), show the more specific DB-path message.
+    if (currentKey === "PARSING_TRANSACTIONS" && parsedType === "CODE") {
+        currentKey = "PARSING_TRANSACTIONS_CODE";
+    }
+    const meta = STAGE_META[currentKey] || STAGE_META["PROCESSING"];
+    const r = 54;
+    const circ = 2 * Math.PI * r;
+    const offset = circ - (meta.pct / 100) * circ;
+
+    return (
+        <div style={{
+            display: "flex", flexDirection: "column", alignItems: "center",
+            justifyContent: "center", padding: "2.5rem 1rem", gap: "1.25rem",
+            background: "linear-gradient(135deg, #f5f3ff 0%, #ede9fe 100%)",
+            borderRadius: "16px", border: "1px solid #ddd6fe",
+            margin: "1rem 0"
+        }}>
+            {/* SVG ring */}
+            <div style={{ position: "relative", width: 128, height: 128 }}>
+                <svg width="128" height="128" style={{ transform: "rotate(-90deg)" }}>
+                    {/* track */}
+                    <circle cx="64" cy="64" r={r} fill="none" stroke="#e0e7ff" strokeWidth="10" />
+                    {/* progress arc */}
+                    <circle
+                        cx="64" cy="64" r={r}
+                        fill="none"
+                        stroke={meta.color}
+                        strokeWidth="10"
+                        strokeLinecap="round"
+                        strokeDasharray={circ}
+                        strokeDashoffset={offset}
+                        style={{ transition: "stroke-dashoffset 0.8s ease, stroke 0.4s ease" }}
+                    />
+                </svg>
+                {/* spinning overlay ring */}
+                <svg width="128" height="128"
+                    style={{
+                        position: "absolute", top: 0, left: 0,
+                        animation: "cpSpin 1.2s linear infinite"
+                    }}
+                >
+                    <circle
+                        cx="64" cy="64" r={r}
+                        fill="none"
+                        stroke={meta.color}
+                        strokeWidth="10"
+                        strokeLinecap="round"
+                        strokeDasharray={`${circ * 0.18} ${circ * 0.82}`}
+                        strokeDashoffset="0"
+                        opacity="0.55"
+                    />
+                </svg>
+                {/* centre percentage */}
+                <div style={{
+                    position: "absolute", inset: 0,
+                    display: "flex", flexDirection: "column",
+                    alignItems: "center", justifyContent: "center"
+                }}>
+                    <span style={{ fontSize: "1.4rem", fontWeight: 800, color: meta.color, lineHeight: 1 }}>
+                        {meta.pct}%
+                    </span>
+                    <span style={{ fontSize: "0.6rem", color: "#6b7280", fontWeight: 600, marginTop: 2 }}>
+                        complete
+                    </span>
+                </div>
+            </div>
+
+            {/* Stage label */}
+            <div style={{ textAlign: "center" }}>
+                <div style={{ fontSize: "1rem", fontWeight: 800, color: "#1e1b4b", marginBottom: "0.35rem" }}>
+                    {meta.label}
+                </div>
+                <div style={{ fontSize: "0.8rem", color: "#6b7280", maxWidth: 280, lineHeight: 1.5 }}>
+                    {meta.sub}
+                </div>
+            </div>
+
+            {/* Elapsed time */}
+            <div style={{
+                display: "flex", alignItems: "center", gap: "0.4rem",
+                fontSize: "0.75rem", color: "#9ca3af", fontWeight: 600
+            }}>
+                <Clock size={12} />
+                {elapsedSeconds}s elapsed
+            </div>
+
+            {/* Animated dots */}
+            <div style={{ display: "flex", gap: "6px" }}>
+                {[0,1,2].map(i => (
+                    <div key={i} style={{
+                        width: 7, height: 7, borderRadius: "50%",
+                        background: meta.color,
+                        animation: `cpDot 1.2s ease-in-out ${i * 0.2}s infinite alternate`
+                    }} />
+                ))}
+            </div>
+
+            <style>{`
+                @keyframes cpSpin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+                @keyframes cpDot  { from { opacity: 0.2; transform: scaleY(0.6); } to { opacity: 1; transform: scaleY(1.2); } }
+            `}</style>
+        </div>
+    );
+}
+
 export default function ParsingPage() {
     const navigate = useNavigate();
 
@@ -192,12 +311,21 @@ export default function ParsingPage() {
         }
     };
 
+    const [elapsedSeconds, setElapsedSeconds] = useState(0);
+    const elapsedRef = useRef(null);
+    const [parsedType, setParsedType] = useState(null);
+
     const handleUpload = async () => {
         if (!file) return;
 
         setStatus("UPLOADING");
         setError("");
         setProcessingStatus("EXTRACTING_TEXT");
+        setElapsedSeconds(0);
+
+        // Start elapsed-time ticker
+        if (elapsedRef.current) clearInterval(elapsedRef.current);
+        elapsedRef.current = setInterval(() => setElapsedSeconds(s => s + 1), 1000);
 
         const formData = new FormData();
         formData.append("file", file);
@@ -213,14 +341,18 @@ export default function ParsingPage() {
                 try {
                     const statusRes = await API.get(`/documents/status/${docId}`);
                     const docStatus = statusRes.data.status;
+                    const docParsedType = statusRes.data.transaction_parsed_type || null;
                     setProcessingStatus(docStatus);
+                    if (docParsedType) setParsedType(docParsedType);
 
                     if (docStatus === "AWAITING_REVIEW" || docStatus === "APPROVE" || docStatus === "POSTED") {
                         clearInterval(pollInterval);
+                        clearInterval(elapsedRef.current);
                         setStatus("DONE");
                         fetchData();
                     } else if (docStatus === "FAILED") {
                         clearInterval(pollInterval);
+                        clearInterval(elapsedRef.current);
                         setStatus("ERROR");
                         setError("Processing failed. The document could not be parsed.");
                     }
@@ -231,9 +363,11 @@ export default function ParsingPage() {
 
             setTimeout(() => {
                 clearInterval(pollInterval);
+                clearInterval(elapsedRef.current);
             }, 300000);
 
         } catch (err) {
+            clearInterval(elapsedRef.current);
             setStatus("ERROR");
             setError(err.response?.data?.detail || "Upload failed. Please try again.");
         }
@@ -293,21 +427,12 @@ export default function ParsingPage() {
                             })}
                         </div>
                         {isProcessing && (
-                            <div style={{
-                                padding: '0.85rem 1rem',
-                                borderRadius: '12px',
-                                background: 'linear-gradient(135deg, #f0eeff 0%, #e8e4ff 100%)',
-                                border: '1px solid #d8d4f0',
-                                marginBottom: '1rem',
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '0.75rem'
-                            }}>
-                                <Loader2 size={16} className="spin-icon" style={{ color: '#483EA8' }} />
-                                <span style={{ fontSize: '0.85rem', fontWeight: 700, color: '#483EA8' }}>
-                                    {getProcessingSubtext() || "Processing Document..."}
-                                </span>
-                            </div>
+                            <CircularProgress
+                                processingStatus={processingStatus}
+                                status={status}
+                                elapsedSeconds={elapsedSeconds}
+                                parsedType={parsedType}
+                            />
                         )}
                     </div>
                 )}
