@@ -2,17 +2,14 @@ import React, { useState, useEffect } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import { supabase } from '../shared/supabase';
 import { 
-  FileCheck, Tag, Database, History, 
-  LayoutDashboard, Loader2, LogOut, ShieldCheck, Zap
+  Package, Tag, Database, History, 
+  LayoutDashboard, Loader2, LogOut, ShieldCheck
 } from 'lucide-react';
 
 // Subcomponents
 import CoaLibraryTab from './CoaLibraryTab';
 import KeywordRulesTab from './KeywordRulesTab';
 import VectorCacheTab from './VectorCacheTab';
-import ReviewDocumentTab from './ReviewDocumentTab';
-import FrequentlyChangedTab from './FrequentlyChangedTab';
-import RandomQCTab from './RandomQCTab';
 
 const CAT_COLORS = {
   'MANUAL': '#3b82f6',
@@ -27,7 +24,7 @@ const CAT_COLORS = {
 
 const QCPanel = () => {
   const { handleLogout, user } = useOutletContext() || {};
-  const [activeTab, setActiveTab] = useState('REVIEW_DOC');
+  const [activeTab, setActiveTab] = useState('COA_LIBRARY');
   const [stats, setStats] = useState({});
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -61,10 +58,11 @@ const QCPanel = () => {
           <div style={styles.brandIcon}><ShieldCheck size={20} color="#fff"/></div>
           <div>
             <div style={styles.brandName}>LEDGERAI / QC</div>
-            <div style={styles.brandSub}>Performance Audit & Tuning</div>
+            <div style={styles.brandSub}>Quality Control & Management</div>
           </div>
         </div>
 
+        {/* Global Stats Overview */}
         {!loading && (
           <div style={styles.statsOverview}>
              <div style={styles.statBar}>
@@ -100,15 +98,13 @@ const QCPanel = () => {
         </div>
       </header>
 
-      {/* ── Tabs Navigation ── */}
+      {/* ── Secondary Nav ── */}
       <nav style={styles.navBar}>
         {[
-          { id: 'REVIEW_DOC', label: 'Review Document', icon: <FileCheck size={14}/> },
-          { id: 'FREQ_CHANGED', label: 'Frequently Changed', icon: <Zap size={14}/> },
-          { id: 'RANDOM_QC', label: 'Random QC', icon: <History size={14}/> },
-          { id: 'KEYWORD_RULES', label: 'Global Keyword Rule', icon: <Tag size={14}/> },
-          { id: 'VECTOR_CACHE', label: 'Global Vector Cache', icon: <Database size={14}/> },
-          { id: 'COA_LIBRARY', label: 'COA Library', icon: <LayoutDashboard size={14}/> },
+          { id: 'COA_LIBRARY', label: 'COA Library', icon: <Package size={14}/> },
+          { id: 'AUDIT_QUEUE', label: 'Audit Queue', icon: <History size={14}/> },
+          { id: 'KEYWORD_RULES', label: 'Keyword Rules', icon: <Tag size={14}/> },
+          { id: 'VECTOR_CACHE', label: 'Vector Cache', icon: <Database size={14}/> },
         ].map(tab => (
           <button 
             key={tab.id}
@@ -123,18 +119,19 @@ const QCPanel = () => {
 
       {/* ── Main Workspace ── */}
       <main style={styles.workspace}>
-        {activeTab === 'REVIEW_DOC' && <ReviewDocumentTab />}
-        {activeTab === 'FREQ_CHANGED' && <FrequentlyChangedTab />}
-        {activeTab === 'RANDOM_QC' && <RandomQCTab />}
+        {activeTab === 'COA_LIBRARY' && <CoaLibraryTab />}
         {activeTab === 'KEYWORD_RULES' && <KeywordRulesTab />}
         {activeTab === 'VECTOR_CACHE' && <VectorCacheTab />}
-        {activeTab === 'COA_LIBRARY' && <CoaLibraryTab />}
+        {activeTab === 'AUDIT_QUEUE' && (
+            <div style={styles.emptyView}>
+                <History size={48} opacity={0.1}/>
+                <h3>Transaction Audit Queue</h3>
+                <p>Advanced manual review dashboard coming in next update.</p>
+            </div>
+        )}
       </main>
 
-      <style>{`
-        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-        .spin { animation: spin 1s linear infinite; }
-      `}</style>
+      <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
     </div>
   );
 };
@@ -146,31 +143,32 @@ const styles = {
     display: 'flex', 
     alignItems: 'center', 
     justifyContent: 'space-between', 
-    background: 'rgba(15, 23, 42, 0.6)', 
-    backdropFilter: 'blur(20px)', 
+    background: 'rgba(15, 23, 42, 0.4)', 
+    backdropFilter: 'blur(16px)', 
     borderBottom: '1px solid rgba(255, 255, 255, 0.05)',
     zIndex: 10
   },
   brand: { display: 'flex', alignItems: 'center', gap: '0.75rem' },
   brandIcon: { width: '40px', height: '40px', borderRadius: '12px', background: 'linear-gradient(135deg, #6366f1, #8b5cf6)', display: 'flex', alignItems: 'center', justifyContent: 'center' },
   brandName: { fontSize: '18px', fontWeight: 900, color: '#fff', letterSpacing: '-0.5px' },
-  brandSub: { fontSize: '10px', color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '1px' },
+  brandSub: { fontSize: '10px', color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' },
   
   statsOverview: { flexGrow: 1, margin: '0 3rem', display: 'flex', flexDirection: 'column', gap: '8px' },
-  statBar: { height: '6px', width: '100%', background: 'rgba(255, 255, 255, 0.05)', borderRadius: '20px', overflow: 'hidden', display: 'flex' },
+  statBar: { height: '6px', width: '100%', background: 'rgba(148, 163, 184, 0.1)', borderRadius: '20px', overflow: 'hidden', display: 'flex' },
   statLegend: { display: 'flex', gap: '12px', flexWrap: 'wrap' },
   legendNode: { display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', color: '#94a3b8' },
   dot: { width: '6px', height: '6px', borderRadius: '50%' },
 
   userProfile: { display: 'flex', alignItems: 'center', gap: '1rem' },
-  userEmail: { fontSize: '11px', fontWeight: 700, background: 'rgba(255,255,255,0.05)', padding: '6px 12px', borderRadius: '20px', color: '#cbd5e1' },
-  logoutBtn: { background: 'rgba(255, 255, 255, 0.05)', border: 'none', color: '#94a3b8', width: '32px', height: '32px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.2s' },
+  userEmail: { fontSize: '12px', fontWeight: 700, color: '#312e81', background: '#38bdf8', padding: '4px 10px', borderRadius: '20px' },
+  logoutBtn: { background: 'rgba(255, 255, 255, 0.05)', border: 'none', color: '#94a3b8', width: '32px', height: '32px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.2s', '&:hover': { background: '#ef4444', color: '#fff' } },
 
-  navBar: { padding: '0.6rem 2rem', background: '#020617', borderBottom: '1px solid aria(255, 255, 255, 0.03)', display: 'flex', gap: '0.4rem', flexWrap: 'wrap' },
-  navLink: { background: 'transparent', border: 'none', color: '#64748b', display: 'flex', alignItems: 'center', gap: '8px', padding: '0.5rem 1rem', borderRadius: '10px', fontSize: '13px', fontWeight: 600, cursor: 'pointer', transition: 'all 0.2s' },
-  navLinkActive: { background: 'rgba(99, 102, 241, 0.1)', border: 'none', color: '#fff', display: 'flex', alignItems: 'center', gap: '8px', padding: '0.5rem 1rem', borderRadius: '10px', fontSize: '13px', fontWeight: 700, cursor: 'pointer', boxShadow: '0 0 20px rgba(99, 102, 241, 0.1)' },
+  navBar: { padding: '0.5rem 2rem', background: '#020617', borderBottom: '1px solid rgba(255, 255, 255, 0.03)', display: 'flex', gap: '0.5rem' },
+  navLink: { background: 'transparent', border: 'none', color: '#64748b', display: 'flex', alignItems: 'center', gap: '8px', padding: '0.5rem 1rem', borderRadius: '8px', fontSize: '13px', fontWeight: 600, cursor: 'pointer', transition: 'all 0.2s' },
+  navLinkActive: { background: 'rgba(99, 102, 241, 0.1)', border: 'none', color: '#fff', display: 'flex', alignItems: 'center', gap: '8px', padding: '0.5rem 1rem', borderRadius: '8px', fontSize: '13px', fontWeight: 700, cursor: 'pointer', boxShadow: '0 0 15px rgba(99, 102, 241, 0.1)' },
   
-  workspace: { flexGrow: 1, padding: '1.5rem', minHeight: 0, overflow: 'hidden' }
+  workspace: { flexGrow: 1, padding: '1.5rem', minHeight: 0, overflow: 'hidden' },
+  emptyView: { height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', opacity: 0.3, textAlign: 'center', gap: '0.5rem' }
 };
 
 export default QCPanel;

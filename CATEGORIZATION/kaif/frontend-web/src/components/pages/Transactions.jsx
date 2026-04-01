@@ -80,6 +80,13 @@ const Transactions = () => {
   const [correctingId, setCorrectingId] = useState(null);
   const [cachedAccounts, setCachedAccounts] = useState([]);
 
+  // ── Similar transactions popup state ────────────────────────────
+  const [similarTxns, setSimilarTxns] = useState([]);
+  const [similarSuggestedAccount, setSimilarSuggestedAccount] = useState(null);
+  const [similarAccountOverrides, setSimilarAccountOverrides] = useState({});
+  const [similarPickerTarget, setSimilarPickerTarget] = useState(null);
+  const [isApprovingSimilar, setIsApprovingSimilar] = useState(false);
+
   // ── Filter popup state ────────────────────────────────────────
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const filterRef = useRef(null);
@@ -420,7 +427,14 @@ const Transactions = () => {
             body: JSON.stringify({ offset_account_id: selectedAccount.account_id })
           }
         );
-        if (!response.ok) {
+        const result = await response.json();
+        if (response.ok) {
+          if (result.similarTransactions && result.similarTransactions.length > 0) {
+            setSimilarTxns(result.similarTransactions);
+            setSimilarSuggestedAccount(result.suggestedAccount);
+            setSimilarAccountOverrides({});
+          }
+        } else {
           showToast('Failed to update category — reverted', 'error');
           if (prevTxn) setTransactions(p => p.map(t =>
             t.uncategorized_transaction_id === uncatId ? prevTxn : t
@@ -467,7 +481,14 @@ const Transactions = () => {
             offset_account_id: selectedAccount.account_id
           })
         });
-        if (!response.ok) {
+        const result = await response.json();
+        if (response.ok) {
+          if (result.similarTransactions && result.similarTransactions.length > 0) {
+            setSimilarTxns(result.similarTransactions);
+            setSimilarSuggestedAccount(result.suggestedAccount);
+            setSimilarAccountOverrides({});
+          }
+        } else {
           showToast('Failed to save categorization — reverted', 'error');
           if (prevTxn) setTransactions(p => p.map(t =>
             t.uncategorized_transaction_id === uncatId ? prevTxn : t
@@ -480,6 +501,69 @@ const Transactions = () => {
         ));
       }
     })();
+  };
+
+  const handleSimilarBulkConfirm = async () => {
+    setIsApprovingSimilar(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+
+      // Recategorise each transaction (use override if set, else suggestedAccount)
+      await Promise.all(similarTxns.map(txn => {
+        const account = similarAccountOverrides[txn.transaction_id] || similarSuggestedAccount;
+        return fetch(`${API_BASE_URL}/api/transactions/${txn.transaction_id}/recategorize`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session?.access_token || ''}`
+          },
+          body: JSON.stringify({ offset_account_id: account.account_id })
+        });
+      }));
+
+      // Bulk approve all of them
+      await fetch(`${API_BASE_URL}/api/transactions/approve-bulk`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session?.access_token || ''}`
+        },
+        body: JSON.stringify({ transaction_ids: similarTxns.map(t => t.transaction_id) })
+      });
+
+      showToast(`${similarTxns.length} similar transactions confirmed`, 'success');
+      setSimilarTxns([]);
+      setSimilarSuggestedAccount(null);
+      fetchTransactions(activeFilter, true);
+    } catch (err) {
+      showToast('Failed to confirm similar transactions', 'error');
+    } finally {
+      setIsApprovingSimilar(false);
+    }
+  };
+
+  const handleSimilarIndividualApprove = async (txn) => {
+    const account = similarAccountOverrides[txn.transaction_id] || similarSuggestedAccount;
+    const { data: { session } } = await supabase.auth.getSession();
+
+    await fetch(`${API_BASE_URL}/api/transactions/${txn.transaction_id}/recategorize`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${session?.access_token || ''}`
+      },
+      body: JSON.stringify({ offset_account_id: account.account_id })
+    });
+
+    await fetch(`${API_BASE_URL}/api/transactions/${txn.transaction_id}/approve`, {
+      method: 'PATCH',
+      headers: { 'Authorization': `Bearer ${session?.access_token || ''}` }
+    });
+
+    setSimilarTxns(prev => prev.filter(t => t.transaction_id !== txn.transaction_id));
+    if (similarTxns.length === 1) {
+      fetchTransactions(activeFilter, true);
+    }
   };
 
   // Correct amount/type — clicking on the amount cell triggers this
@@ -974,6 +1058,104 @@ const Transactions = () => {
           )}
         </div>
       </div>
+
+      {similarTxns.length > 0 && (
+        <div className="modal-overlay" onClick={() => setSimilarTxns([])}>
+          <div className="similar-txns-modal" onClick={e => e.stopPropagation()}>
+
+            <div className="modal-header">
+              <div>
+                <h2>Similar Transactions Found</h2>
+                <p className="similar-subtitle">
+                  We found {similarTxns.length} similar pending transaction
+                  {similarTxns.length > 1 ? 's' : ''}.
+                  Suggested account: <strong>{similarSuggestedAccount?.account_name}</strong>
+                </p>
+              </div>
+              <button className="modal-close-btn" onClick={() => setSimilarTxns([])}>✕</button>
+            </div>
+
+            <div className="similar-txns-list">
+              {similarTxns.map(txn => {
+                const assignedAccount = similarAccountOverrides[txn.transaction_id] || similarSuggestedAccount;
+                return (
+                  <div key={txn.transaction_id} className="similar-txn-row">
+                    <div className="similar-txn-date">
+                      {new Date(txn.transaction_date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}
+                    </div>
+                    <div className="similar-txn-details">{txn.details}</div>
+                    <div className="similar-txn-amount">
+                      {txn.transaction_type === 'DEBIT' ? '−' : '+'}
+                      ₹{(txn.amount || 0).toLocaleString('en-IN')}
+                    </div>
+                    <div className="similar-txn-from">
+                      <span className="similar-from-label">
+                        {txn.current_account?.account_name || '—'}
+                      </span>
+                      <span className="similar-arrow">→</span>
+                      <button
+                        className="similar-account-btn"
+                        onClick={() => setSimilarPickerTarget(txn.transaction_id)}
+                      >
+                        {assignedAccount?.account_name}
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none"
+                             stroke="currentColor" strokeWidth="2.5">
+                          <path d="M6 9l6 6 6-6"/>
+                        </svg>
+                      </button>
+                    </div>
+                    <button
+                      className="action-icon-btn approve"
+                      title="Approve this one"
+                      onClick={() => handleSimilarIndividualApprove(txn)}
+                    >
+                      <ICONS.Check />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="similar-txns-footer">
+              <button
+                className="action-btn"
+                onClick={() => setSimilarTxns([])}
+              >
+                Dismiss
+              </button>
+              <button
+                className={`action-btn approve-selected has-selection`}
+                onClick={handleSimilarBulkConfirm}
+                disabled={isApprovingSimilar}
+              >
+                {isApprovingSimilar
+                  ? <><span className="spinner-small"></span> Confirming...</>
+                  : <><ICONS.Check /> Confirm All ({similarTxns.length})</>
+                }
+              </button>
+            </div>
+
+          </div>
+
+          {/* Inline account picker for per-row override */}
+          {similarPickerTarget && (
+            <AccountPickerModal
+              onClose={() => setSimilarPickerTarget(null)}
+              currentAccountId={
+                (similarAccountOverrides[similarPickerTarget] || similarSuggestedAccount)?.account_id
+              }
+              preloadedAccounts={cachedAccounts}
+              onSelect={(account) => {
+                setSimilarAccountOverrides(prev => ({
+                  ...prev,
+                  [similarPickerTarget]: account
+                }));
+                setSimilarPickerTarget(null);
+              }}
+            />
+          )}
+        </div>
+      )}
 
       {isUploadOpen && (
         <UploadModal

@@ -124,7 +124,71 @@ async function recategorizeTransaction(req, res) {
       return res.status(500).json({ error: 'Failed to recategorize transaction.' });
     }
 
-    return res.status(200).json({ success: true });
+    // Fetch the just-updated transaction to get match fields
+    const { data: updatedTxn } = await supabase
+      .from('transactions')
+      .select('extracted_id, clean_merchant_name, transaction_type, offset_account_id')
+      .eq('transaction_id', transactionId)
+      .eq('user_id', userId)
+      .single();
+
+    let similarTransactions = [];
+    let suggestedAccount = null;
+
+    if (updatedTxn) {
+      const { extracted_id, clean_merchant_name, transaction_type, offset_account_id } = updatedTxn;
+
+      // Fetch account name for suggestedAccount
+      const { data: suggestedAccountData } = await supabase
+        .from('accounts')
+        .select('account_id, account_name')
+        .eq('account_id', offset_account_id)
+        .single();
+
+      suggestedAccount = suggestedAccountData || null;
+
+      // Build match condition — prefer extracted_id, fallback to clean_merchant_name
+      let similarQuery = supabase
+        .from('transactions')
+        .select(`
+          transaction_id,
+          amount,
+          transaction_type,
+          transaction_date,
+          details,
+          clean_merchant_name,
+          extracted_id,
+          offset_account_id,
+          current_account:base_account_id (
+            account_id,
+            account_name
+          )
+        `)
+        .eq('user_id', userId)
+        .eq('review_status', 'PENDING')
+        .eq('transaction_type', transaction_type)
+        .neq('transaction_id', transactionId)
+        .neq('is_uncategorised', true);
+
+      if (extracted_id) {
+        similarQuery = similarQuery.eq('extracted_id', extracted_id);
+      } else if (clean_merchant_name) {
+        similarQuery = similarQuery.eq('clean_merchant_name', clean_merchant_name);
+      } else {
+        similarQuery = null;
+      }
+
+      if (similarQuery) {
+        const { data: similar } = await similarQuery;
+        similarTransactions = similar || [];
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      similarTransactions,
+      suggestedAccount
+    });
   } catch (err) {
     console.error('Unexpected error in recategorizeTransaction:', err);
     return res.status(500).json({ error: 'Internal server error.' });
@@ -423,10 +487,13 @@ async function manualCategorizeTransaction(req, res) {
     // Fetch the newly created transaction to get its generated ID
     const { data: newTxn } = await supabase
       .from('transactions')
-      .select('transaction_id, base_account_id, offset_account_id, amount, transaction_type, transaction_date')
+      .select('transaction_id, base_account_id, offset_account_id, amount, transaction_type, transaction_date, extracted_id, clean_merchant_name')
       .eq('uncategorized_transaction_id', uncategorized_transaction_id)
       .eq('user_id', userId)
       .single();
+
+    let similarTransactions = [];
+    let suggestedAccount = null;
 
     if (newTxn) {
       await createLedgerEntries(
@@ -439,6 +506,51 @@ async function manualCategorizeTransaction(req, res) {
         false,
         userId
       );
+
+      // Fetch account name for suggestedAccount
+      const { data: suggestedAccountData } = await supabase
+        .from('accounts')
+        .select('account_id, account_name')
+        .eq('account_id', newTxn.offset_account_id)
+        .single();
+
+      suggestedAccount = suggestedAccountData || null;
+
+      // Build match condition for similar transactions
+      let similarQuery = supabase
+        .from('transactions')
+        .select(`
+          transaction_id,
+          amount,
+          transaction_type,
+          transaction_date,
+          details,
+          clean_merchant_name,
+          extracted_id,
+          offset_account_id,
+          current_account:base_account_id (
+            account_id,
+            account_name
+          )
+        `)
+        .eq('user_id', userId)
+        .eq('review_status', 'PENDING')
+        .eq('transaction_type', newTxn.transaction_type)
+        .neq('transaction_id', newTxn.transaction_id)
+        .neq('is_uncategorised', true);
+
+      if (newTxn.extracted_id) {
+        similarQuery = similarQuery.eq('extracted_id', newTxn.extracted_id);
+      } else if (newTxn.clean_merchant_name) {
+        similarQuery = similarQuery.eq('clean_merchant_name', newTxn.clean_merchant_name);
+      } else {
+        similarQuery = null;
+      }
+
+      if (similarQuery) {
+        const { data: similar } = await similarQuery;
+        similarTransactions = similar || [];
+      }
 
       // Seed personal cache based on whether the raw details is garbage
       const rawDetails = uncatData.details || '';
@@ -463,7 +575,11 @@ async function manualCategorizeTransaction(req, res) {
       }
     }
 
-    return res.status(200).json({ success: true });
+    return res.status(200).json({
+      success: true,
+      similarTransactions,
+      suggestedAccount
+    });
   } catch (err) {
     console.error('Unexpected error in manualCategorizeTransaction:', err);
     return res.status(500).json({ error: 'Internal server error.' });

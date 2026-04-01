@@ -73,7 +73,8 @@
 }
 
 /* Period Selector */
-.filter-tabs {
+.filter-tabs,
+.view-tabs {
   display: flex;
   gap: 4px;
   margin-bottom: 28px;

@@ -57,10 +57,11 @@ const formatDate = (dateStr) => {
 };
 
 const Analytics = () => {
-  const [view, setView] = useState('pl');           // 'pl' | 'ledger'
+  const [view, setView] = useState('pl');           // 'pl' | 'balance' | 'ledger'
   const [period, setPeriod] = useState('month');    // 'month' | 'quarter' | 'year' | 'all'
   const [loading, setLoading] = useState(true);
   const [plData, setPlData] = useState(null);
+  const [balanceData, setBalanceData] = useState(null);
   const [ledgerData, setLedgerData] = useState([]);
 
   /**
@@ -133,6 +134,69 @@ const Analytics = () => {
             .map(([name, amount]) => ({ name, amount }))
             .sort((a, b) => b.amount - a.amount)
         });
+      } else if (view === 'balance') {
+        // Fetch Balance Sheet data
+        const { data, error } = await supabase
+          .from('ledger_entries')
+          .select(`
+            debit_amount,
+            credit_amount,
+            account:account_id (
+              account_id,
+              account_name,
+              account_type,
+              balance_nature,
+              parent_account:parent_account_id (
+                account_name
+              )
+            )
+          `)
+          .eq('user_id', user.id)
+          .gte('entry_date', range.from)
+          .lte('entry_date', range.to);
+
+        console.log('Balance Sheet Query:', { user_id: user.id, range, data, error });
+        if (error) throw error;
+
+        // Compute balances from ledger entries
+        const accountMap = {};
+        (data || []).forEach(entry => {
+          if (!entry.account) return;
+          const { account_id, account_name, account_type, balance_nature } = entry.account;
+          if (account_type !== 'ASSET' && account_type !== 'LIABILITY') return;
+
+          if (!accountMap[account_id]) {
+            accountMap[account_id] = {
+              account_id,
+              account_name,
+              account_type,
+              balance_nature,
+              totalDebit: 0,
+              totalCredit: 0
+            };
+          }
+          accountMap[account_id].totalDebit += entry.debit_amount || 0;
+          accountMap[account_id].totalCredit += entry.credit_amount || 0;
+        });
+
+        // Compute final balance per account
+        const accounts = Object.values(accountMap).map(acc => ({
+          ...acc,
+          balance: acc.balance_nature === 'DEBIT'
+            ? acc.totalDebit - acc.totalCredit
+            : acc.totalCredit - acc.totalDebit
+        })).filter(acc => acc.balance !== 0);
+
+        const assets = accounts.filter(a => a.account_type === 'ASSET')
+          .sort((a, b) => b.balance - a.balance);
+        const liabilities = accounts.filter(a => a.account_type === 'LIABILITY')
+          .sort((a, b) => b.balance - a.balance);
+
+        const totalAssets = assets.reduce((sum, a) => sum + a.balance, 0);
+        const totalLiabilities = liabilities.reduce((sum, a) => sum + a.balance, 0);
+        const netWorth = totalAssets - totalLiabilities;
+
+        setBalanceData({ assets, liabilities, totalAssets, totalLiabilities, netWorth });
       } else {
         // Fetch Ledger data
         const { data, error } = await supabase
@@ -165,6 +229,7 @@ const Analytics = () => {
     } catch (err) {
       console.error('Error fetching analytics data:', err);
       setPlData(null);
+      setBalanceData(null);
       setLedgerData([]);
     } finally {
       setLoading(false);
@@ -260,6 +325,87 @@ const Analytics = () => {
   };
 
   /**
+   * Render Balance Sheet View
+   */
+  const renderBalanceView = () => {
+    if (loading) {
+      return (
+        <div className="placeholder-rows" style={{ justifyContent: 'center' }}>
+          <div className="empty-state">
+            <div className="spinner"></div>
+            <p>Loading balance sheet data...</p>
+          </div>
+        </div>
+      );
+    }
+
+    if (!balanceData) {
+      return (
+        <div className="placeholder-rows" style={{ justifyContent: 'center' }}>
+          <div className="empty-state">
+            <div className="empty-icon">📊</div>
+            <p>No data available</p>
+          </div>
+        </div>
+      );
+    }
+
+    const { assets, liabilities, totalAssets, totalLiabilities, netWorth } = balanceData;
+
+    return (
+      <div className="analytics-content">
+        {/* Summary Cards */}
+        <div className="summary-cards">
+          <div className="summary-card">
+            <div className="card-label">Total Assets</div>
+            <div className="card-value income">{formatCurrency(totalAssets)}</div>
+          </div>
+          <div className="summary-card">
+            <div className="card-label">Total Liabilities</div>
+            <div className="card-value expense">{formatCurrency(totalLiabilities)}</div>
+          </div>
+          <div className="summary-card">
+            <div className="card-label">Net Worth</div>
+            <div className={`card-value ${netWorth >= 0 ? 'net-positive' : 'net-negative'}`}>
+              {formatCurrency(netWorth)}
+            </div>
+          </div>
+        </div>
+
+        {/* Breakdown Grid */}
+        <div className="breakdown-grid">
+          <div className="breakdown-card">
+            <h3>Assets</h3>
+            {assets.length === 0 ? (
+              <div className="breakdown-empty">No asset activity for this period</div>
+            ) : (
+              assets.map((item, idx) => (
+                <div key={idx} className="breakdown-row">
+                  <span className="breakdown-account-name">{item.account_name}</span>
+                  <span className="breakdown-amount">{formatCurrency(item.balance)}</span>
+                </div>
+              ))
+            )}
+          </div>
+          <div className="breakdown-card">
+            <h3>Liabilities</h3>
+            {liabilities.length === 0 ? (
+              <div className="breakdown-empty">No liabilities for this period</div>
+            ) : (
+              liabilities.map((item, idx) => (
+                <div key={idx} className="breakdown-row">
+                  <span className="breakdown-account-name">{item.account_name}</span>
+                  <span className="breakdown-amount">{formatCurrency(item.balance)}</span>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  /**
    * Render Ledger View
    */
   const renderLedgerView = () => {
@@ -334,15 +480,19 @@ const Analytics = () => {
           <h1>Analytics</h1>
           <p>Financial performance and transaction details</p>
         </div>
-        <div className="view-toggle">
-          <span className={`toggle-label ${view === 'pl' ? 'active-label' : ''}`}>P&L</span>
-          <div
-            className={`toggle-track ${view === 'ledger' ? 'active' : ''}`}
-            onClick={() => setView(view === 'pl' ? 'ledger' : 'pl')}
-          >
-            <div className="toggle-thumb"></div>
-          </div>
-          <span className={`toggle-label ${view === 'ledger' ? 'active-label' : ''}`}>Ledger</span>
+        <div className="view-tabs">
+          <button
+            className={`filter-tab ${view === 'pl' ? 'active' : ''}`}
+            onClick={() => setView('pl')}
+          >P&L</button>
+          <button
+            className={`filter-tab ${view === 'balance' ? 'active' : ''}`}
+            onClick={() => setView('balance')}
+          >Balance Sheet</button>
+          <button
+            className={`filter-tab ${view === 'ledger' ? 'active' : ''}`}
+            onClick={() => setView('ledger')}
+          >Ledger</button>
         </div>
       </div>
 
@@ -375,7 +525,9 @@ const Analytics = () => {
       </div>
 
       {/* Content */}
-      {view === 'pl' ? renderPLView() : renderLedgerView()}
+      {view === 'pl' && renderPLView()}
+      {view === 'balance' && renderBalanceView()}
+      {view === 'ledger' && renderLedgerView()}
     </div>
   );
 };

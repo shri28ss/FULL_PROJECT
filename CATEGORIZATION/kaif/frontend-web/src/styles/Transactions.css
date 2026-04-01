@@ -669,3 +669,109 @@
   0%, 100% { opacity: 0.5; }
   50% { opacity: 0.25; }
 }
+/* Similar Transactions Modal */
+.similar-txns-modal {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: 16px;
+  width: 720px;
+  max-width: 95vw;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.similar-subtitle {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+
+.similar-txns-list {
+  overflow-y: auto;
+  flex: 1;
+  padding: 8px 0;
+}
+
+.similar-txn-row {
+  display: grid;
+  grid-template-columns: 70px 1fr 100px 240px 40px;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 24px;
+  border-bottom: 1px solid var(--glass-border);
+  font-size: 13px;
+}
+
+.similar-txn-row:last-child {
+  border-bottom: none;
+}
+
+.similar-txn-date {
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.similar-txn-details {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+.similar-txn-amount {
+  text-align: right;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.similar-txn-from {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+}
+
+.similar-from-label {
+  color: var(--text-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 80px;
+}
+
+.similar-arrow {
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.similar-account-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--accent-color);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 120px;
+}
+
+.similar-account-btn:hover {
+  border-color: var(--accent-color);
+}
+
+.similar-txns-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 16px 24px;
+  border-top: 1px solid var(--glass-border);
+}
