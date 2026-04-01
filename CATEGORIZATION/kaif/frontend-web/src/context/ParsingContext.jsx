@@ -1,17 +1,27 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import API from '../api/api';
 
 const ParsingContext = createContext();
 
 export const useParsing = () => useContext(ParsingContext);
 
+// Step definition logic — moved to context for consistency
+export const extractionSteps = [
+    { label: "Upload", icon: "FileUp", statuses: ["UPLOADED", "UPLOADING", "PROCESSING"] },
+    { label: "Text Extraction", icon: "List", statuses: ["EXTRACTING_TEXT"] },
+    { label: "Identification", icon: "Search", statuses: ["IDENTIFYING_FORMAT"] },
+    { label: "Analysis", icon: "Cpu", statuses: ["PARSING_TRANSACTIONS", "PARSING_TRANSACTIONS_CODE"] },
+    { label: "Ready", icon: "CheckCircle", statuses: ["AWAITING_REVIEW", "DONE", "APPROVE", "POSTED"] },
+];
+
 export const ParsingProvider = ({ children }) => {
     const [activeDoc, setActiveDoc] = useState(null);
     const [isExtracting, setIsExtracting] = useState(false);
     const [latestFinishedDocId, setLatestFinishedDocId] = useState(null);
+    const [maxStepReached, setMaxStepReached] = useState(-1);
     
-    // Notification Modal State
-    const [notification, setNotification] = useState(null); // { type: 'success'|'error', title, message, docId }
+    const [notification, setNotification] = useState(null);
 
     const pollRef = useRef(null);
     const timerRef = useRef(null);
@@ -25,11 +35,12 @@ export const ParsingProvider = ({ children }) => {
 
     const startExtraction = async (file, password = "") => {
         setIsExtracting(true);
+        setMaxStepReached(0); // Start at step 0
         setActiveDoc({
             id: null,
             name: file.name,
             status: "UPLOADING",
-            processingStatus: "EXTRACTING_TEXT",
+            processingStatus: "UPLOADING",
             elapsedSeconds: 0,
             parsedType: null
         });
@@ -54,11 +65,21 @@ export const ParsingProvider = ({ children }) => {
                     const statusRes = await API.get(`/documents/status/${docId}`);
                     const { status: docStatus, transaction_parsed_type: docParsedType } = statusRes.data;
                     
-                    setActiveDoc(prev => ({ 
-                        ...prev, 
-                        processingStatus: docStatus, 
-                        parsedType: docParsedType || prev.parsedType 
-                    }));
+                    setActiveDoc(prev => {
+                        const newDoc = { 
+                            ...prev, 
+                            processingStatus: docStatus, 
+                            parsedType: docParsedType || prev?.parsedType 
+                        };
+
+                        // Update global progress gate
+                        const stepIdx = extractionSteps.findIndex(s => s.statuses.includes(docStatus));
+                        if (stepIdx > maxStepReached) {
+                            setMaxStepReached(stepIdx);
+                        }
+
+                        return newDoc;
+                    });
 
                     if (["AWAITING_REVIEW", "APPROVE", "POSTED", "DONE"].includes(docStatus)) {
                         stopPolling(docId, "DONE");
@@ -85,6 +106,7 @@ export const ParsingProvider = ({ children }) => {
         } catch (err) {
             setIsExtracting(false);
             setActiveDoc(null);
+            setMaxStepReached(-1);
             throw err;
         }
     };
@@ -100,6 +122,7 @@ export const ParsingProvider = ({ children }) => {
     const clearActiveDoc = () => {
         setActiveDoc(null);
         setIsExtracting(false);
+        setMaxStepReached(-1);
     };
 
     return (
@@ -111,7 +134,8 @@ export const ParsingProvider = ({ children }) => {
             clearActiveDoc,
             setLatestFinishedDocId,
             notification,
-            setNotification
+            setNotification,
+            maxStepReached
         }}>
             {children}
             <NotificationPortal notification={notification} onClose={() => setNotification(null)} />
@@ -120,6 +144,7 @@ export const ParsingProvider = ({ children }) => {
 };
 
 const NotificationPortal = ({ notification, onClose }) => {
+    const navigate = useNavigate();
     if (!notification) return null;
 
     return (
@@ -132,7 +157,7 @@ const NotificationPortal = ({ notification, onClose }) => {
             animation: 'slideIn 0.4s ease-out'
         }}>
             <div style={{
-                background: 'rgba(255, 255, 255, 0.85)',
+                background: 'var(--bg-secondary, rgba(255, 255, 255, 0.85))',
                 backdropFilter: 'blur(12px)',
                 borderRadius: '16px',
                 border: `1px solid ${notification.type === 'success' ? 'rgba(39, 174, 96, 0.2)' : 'rgba(231, 76, 60, 0.2)'}`,
@@ -157,16 +182,16 @@ const NotificationPortal = ({ notification, onClose }) => {
                     </span>
                 </div>
                 <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: 800, fontSize: '0.95rem', color: '#1e1b4b', marginBottom: '4px' }}>
+                    <div style={{ fontWeight: 800, fontSize: '0.95rem', color: 'var(--text-primary, #1e1b4b)', marginBottom: '4px' }}>
                         {notification.title}
                     </div>
-                    <div style={{ fontSize: '0.8rem', color: '#6b7280', lineHeight: 1.4, marginBottom: '0.75rem' }}>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary, #6b7280)', lineHeight: 1.4, marginBottom: '0.75rem' }}>
                         {notification.message}
                     </div>
                     <div style={{ display: 'flex', gap: '8px' }}>
                         {notification.type === 'success' && (
                             <button 
-                                onClick={() => { window.location.href = `/review?id=${notification.docId}`; onClose(); }}
+                                onClick={onClose}
                                 style={{
                                     background: '#483EA8', color: '#fff', border: 'none', 
                                     padding: '6px 16px', borderRadius: '6px', fontSize: '0.75rem', 
@@ -179,12 +204,12 @@ const NotificationPortal = ({ notification, onClose }) => {
                         <button 
                             onClick={onClose}
                             style={{
-                                background: 'transparent', color: '#9ca3af', border: '1px solid #e5e7eb', 
-                                padding: '6px 12px', borderRadius: '6px', fontSize: '0.75rem', 
+                                background: 'transparent', color: 'var(--text-secondary, #9ca3af)', border: '1px solid var(--border-color, #e5e7eb)', 
+                                padding: '6px 16px', borderRadius: '6px', fontSize: '0.75rem', 
                                 fontWeight: 700, cursor: 'pointer'
                             }}
                         >
-                            Dismiss
+                            Close
                         </button>
                     </div>
                 </div>

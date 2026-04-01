@@ -6,17 +6,18 @@ import {
 } from "lucide-react";
 import API from "../api/api";
 import { useNavigate } from "react-router-dom";
-import { useParsing } from "../context/ParsingContext";
+import { useParsing, extractionSteps } from "../context/ParsingContext";
 
 // ── Circular Processing Indicator ────────────────────────────────────────────
 const STAGE_META = {
+    UPLOADED:                  { label: "Initializing",                       sub: "Setting up extraction workspace...",                                   color: "#483EA8", pct: 10 },
+    UPLOADING:                 { label: "Uploading",                          sub: "Sending file to processing server...",                                  color: "#483EA8", pct: 10 },
+    PROCESSING:                { label: "Processing",                         sub: "Enqueuing document in extraction pipeline...",                          color: "#483EA8", pct: 20 },
     EXTRACTING_TEXT:           { label: "Extracting Text",                    sub: "Reading PDF pages and extracting raw text...",                          color: "#6366f1", pct: 33 },
     IDENTIFYING_FORMAT:        { label: "Identifying Format",                  sub: "Matching statement format in database...",                               color: "#8b5cf6", pct: 55 },
     PARSING_TRANSACTIONS:      { label: "Parsing Transactions",                sub: "Running Code + LLM extraction pipeline...",                              color: "#a855f7", pct: 78 },
     PARSING_TRANSACTIONS_CODE: { label: "Extracting Transactions",             sub: "Format found in DB — using stored extraction logic (fast path)...",      color: "#0d9488", pct: 68 },
     AWAITING_REVIEW:           { label: "Finalizing",                          sub: "Validating transactions and preparing review...",                        color: "#27ae60", pct: 100 },
-    UPLOADING:                 { label: "Uploading Document",                  sub: "Sending file to processing server...",                                  color: "#483EA8", pct: 10 },
-    PROCESSING:                { label: "Starting Pipeline",                   sub: "Initializing extraction pipeline...",                                   color: "#483EA8", pct: 20 },
 };
 
 function CircularProgress({ processingStatus, status, elapsedSeconds, parsedType }) {
@@ -68,7 +69,7 @@ function CircularProgress({ processingStatus, status, elapsedSeconds, parsedType
 
 export default function ParsingPage() {
     const navigate = useNavigate();
-    const { activeDoc, isExtracting, startExtraction, clearActiveDoc } = useParsing();
+    const { activeDoc, isExtracting, startExtraction, clearActiveDoc, maxStepReached } = useParsing();
 
     const [file, setFile] = useState(null);
     const [password, setPassword] = useState("");
@@ -89,6 +90,13 @@ export default function ParsingPage() {
     useEffect(() => {
         fetchData();
     }, []);
+
+    // Also fetch data when a doc finishes to show it in table
+    useEffect(() => {
+        if (!isExtracting && activeDoc?.status === "DONE") {
+            fetchData();
+        }
+    }, [isExtracting, activeDoc]);
 
     const fetchData = async () => {
         setIsLoading(true);
@@ -127,22 +135,13 @@ export default function ParsingPage() {
         }
     };
 
-    const steps = [
-        { label: "Upload & Detect", icon: Search, statuses: ["UPLOADING", "PROCESSING", "EXTRACTING_TEXT", "IDENTIFYING_FORMAT", "PARSING_TRANSACTIONS", "AWAITING_REVIEW", "DONE"] },
-        { label: "Text Extraction", icon: List, statuses: ["EXTRACTING_TEXT", "IDENTIFYING_FORMAT", "PARSING_TRANSACTIONS", "AWAITING_REVIEW", "DONE"] },
-        { label: "Format Identification", icon: Search, statuses: ["IDENTIFYING_FORMAT", "PARSING_TRANSACTIONS", "AWAITING_REVIEW", "DONE"] },
-        { label: "Transaction Extraction", icon: Cpu, statuses: ["PARSING_TRANSACTIONS", "AWAITING_REVIEW", "DONE"] },
-        { label: "Finalizing", icon: CheckCircle, statuses: ["AWAITING_REVIEW", "DONE"] },
-    ];
-
-    const getStepState = (step, idx) => {
+    const getStepState = (idx) => {
         if (!activeDoc) return "pending";
         const currentStatus = activeDoc.processingStatus || activeDoc.status;
-        if (currentStatus === "DONE" || currentStatus === "AWAITING_REVIEW") return "completed";
+        if (["DONE", "APPROVE", "POSTED"].includes(currentStatus)) return "completed";
         
-        const currentStepIdx = steps.findIndex(s => s.statuses.includes(currentStatus));
-        if (idx < currentStepIdx) return "completed";
-        if (idx === currentStepIdx) return "active";
+        if (idx < maxStepReached) return "completed";
+        if (idx === maxStepReached) return "active";
         return "pending";
     };
 
@@ -181,10 +180,15 @@ export default function ParsingPage() {
         if (!file) return;
         try {
             await startExtraction(file, password);
-            fetchData();
         } catch (err) {
             setError(err.message || "Upload failed.");
         }
+    };
+
+    const getIcon = (name) => {
+        const iconMap = { FileUp, Clock, List, Search, Cpu, CheckCircle };
+        const IconComp = iconMap[name] || FileText;
+        return <IconComp size={14} />;
     };
 
     return (
@@ -197,8 +201,8 @@ export default function ParsingPage() {
                 {activeDoc && (
                     <div style={{ marginBottom: '1.5rem' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem', marginBottom: '1.5rem' }}>
-                            {steps.map((step, i) => {
-                                const state = getStepState(step, i);
+                            {extractionSteps.map((step, i) => {
+                                const state = getStepState(i);
                                 return (
                                     <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 1, position: 'relative' }}>
                                         <div style={{
@@ -208,10 +212,10 @@ export default function ParsingPage() {
                                             color: state === 'pending' ? 'var(--text-secondary)' : 'white',
                                             marginBottom: '0.4rem', zIndex: 1, transition: 'all 0.3s'
                                         }}>
-                                            {state === 'completed' ? <CheckCircle size={14} /> : state === 'active' ? <Loader2 size={14} className="spin-icon" /> : <step.icon size={14} />}
+                                            {state === 'completed' ? <CheckCircle size={14} /> : state === 'active' ? <Loader2 size={14} className="spin-icon" /> : getIcon(step.icon)}
                                         </div>
                                         <span style={{ fontSize: '0.6rem', fontWeight: 700, color: 'var(--text-primary)', textAlign: 'center' }}>{step.label}</span>
-                                        {i < steps.length - 1 && (
+                                        {i < extractionSteps.length - 1 && (
                                             <div style={{ position: 'absolute', top: 14, left: '50%', width: '100%', height: 2, background: state === 'completed' ? '#27ae60' : 'rgba(0,0,0,0.05)', zIndex: 0 }} />
                                         )}
                                     </div>
