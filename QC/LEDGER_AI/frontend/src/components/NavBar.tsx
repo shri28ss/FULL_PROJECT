@@ -18,6 +18,12 @@ export default function NavBar() {
         <NavLink to="/random-documents" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
           Random Check
         </NavLink>
+        <NavLink to="/global-vector-cache" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+          Vector Cache
+        </NavLink>
+        <NavLink to="/global-keyword-rules" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+          Keyword Rules
+        </NavLink>
       </div>
     </nav>
   );

@@ -9,8 +9,12 @@ def safe_json_loads(data):
 import os
 from dotenv import load_dotenv
 load_dotenv()
-
-from fastapi import FastAPI
+import io
+import csv
+import requests
+from fastapi import UploadFile, File,FastAPI
+from pydantic import BaseModel
+from typing import Optional
 from fastapi.middleware.cors import CORSMiddleware
 from db.connection import get_connection, get_cursor
 from fastapi.responses import FileResponse, JSONResponse
@@ -1062,6 +1066,348 @@ def generate_llm_report():
         "report_text": "\n".join(report_lines)
     }
 
+# URL of your ml-service (the FastAPI app in CATEGORIZATION/kaif/ml-service/main.py)
+# Change host/port if the service runs elsewhere (e.g. Docker, remote server)
+ML_SERVICE_URL = "http://localhost:5000"
+ 
+ 
+def _generate_embedding(text: str) -> list:
+    """Call ml-service POST /embed → returns list[float] of length 384."""
+    resp = requests.post(
+        f"{ML_SERVICE_URL}/embed",
+        json={"text": text},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.json()["embedding"]
+ 
+ 
+# ── Pydantic models ────────────────────────────────────────────────────────────
+ 
+class VectorCacheCreateRequest(BaseModel):
+    clean_name: str
+    target_template_id: Optional[int] = None
+ 
+ 
+class KeywordRuleCreateRequest(BaseModel):
+    keyword: str
+    target_template_id: Optional[int] = None
+    match_type: str = "CONTAINS"
+    priority: int = 90
+    is_active: bool = True
+ 
+ 
+# ======================================================================
+# GLOBAL VECTOR CACHE  —  3 endpoints
+# ======================================================================
+ 
+@app.get("/api/global-vector-cache")
+def get_global_vector_cache():
+    """
+    Returns every row in global_vector_cache ordered by cache_id.
+    The embedding vector is cast to text so psycopg2 returns it as a
+    plain string ("[0.12, -0.34, ...]") — the frontend truncates it for display.
+    """
+    conn = get_connection()
+    cursor = get_cursor(conn)
+ 
+    cursor.execute("""
+        SELECT
+            cache_id,
+            clean_name,
+            target_template_id,
+            embedding::text  AS embedding,
+            approval_count,
+            is_verified,
+            created_at,
+            updated_at
+        FROM global_vector_cache
+        ORDER BY cache_id ASC
+    """)
+    rows = cursor.fetchall()
+ 
+    cursor.close()
+    conn.close()
+    return rows
+ 
+ 
+@app.post("/api/global-vector-cache")
+def create_vector_cache_entry(req: VectorCacheCreateRequest):
+    """
+    Single manual entry.
+    Accepts { clean_name, target_template_id? }.
+    Generates a 384-dim embedding via the ml-service and inserts the row.
+    Returns the newly created row or a JSON error.
+    """
+    clean_name = req.clean_name.strip().upper()
+ 
+    if not clean_name:
+        return JSONResponse(status_code=400, content={"error": "clean_name is required."})
+ 
+    # Generate embedding
+    try:
+        embedding = _generate_embedding(clean_name)
+    except Exception as exc:
+        return JSONResponse(
+            status_code=502,
+            content={"error": f"Embedding service unavailable: {str(exc)}"},
+        )
+ 
+    embedding_str = "[" + ",".join(str(v) for v in embedding) + "]"
+ 
+    conn = get_connection()
+    cursor = get_cursor(conn)
+ 
+    # Reject duplicates (unique constraint on clean_name)
+    cursor.execute(
+        "SELECT cache_id FROM global_vector_cache WHERE clean_name = %s",
+        (clean_name,),
+    )
+    existing = cursor.fetchone()
+    if existing:
+        cursor.close()
+        conn.close()
+        return JSONResponse(
+            status_code=409,
+            content={"error": f'"{clean_name}" already exists in the vector cache (cache_id={existing["cache_id"]}).'},
+        )
+ 
+    cursor.execute(
+        """
+        INSERT INTO global_vector_cache
+            (clean_name, target_template_id, embedding, approval_count, is_verified)
+        VALUES (%s, %s, %s::vector, 1, false)
+        RETURNING
+            cache_id, clean_name, target_template_id,
+            embedding::text AS embedding,
+            approval_count, is_verified, created_at, updated_at
+        """,
+        (clean_name, req.target_template_id, embedding_str),
+    )
+    new_row = cursor.fetchone()
+    conn.commit()
+    cursor.close()
+    conn.close()
+ 
+    return new_row
+ 
+ 
+@app.post("/api/global-vector-cache/bulk")
+async def bulk_create_vector_cache(file: UploadFile = File(...)):
+    """
+    CSV bulk import for global_vector_cache.
+    Required CSV column : clean_name
+    Optional CSV column : target_template_id
+    Generates an embedding for every row (calls ml-service).
+    Skips rows whose clean_name already exists.
+    Returns { inserted, skipped, errors }.
+    """
+    if not (file.filename or "").endswith(".csv"):
+        return JSONResponse(status_code=400, content={"error": "Only .csv files are accepted."})
+ 
+    contents = await file.read()
+    reader = csv.DictReader(io.StringIO(contents.decode("utf-8", errors="replace")))
+ 
+    if "clean_name" not in (reader.fieldnames or []):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "CSV must contain a 'clean_name' column."},
+        )
+ 
+    inserted = 0
+    skipped  = 0
+    errors   = []
+ 
+    conn = get_connection()
+    cursor = get_cursor(conn)
+ 
+    for i, row in enumerate(reader, start=2):   # row 1 is the header
+        raw_name = (row.get("clean_name") or "").strip().upper()
+        if not raw_name:
+            skipped += 1
+            continue
+ 
+        raw_tid     = (row.get("target_template_id") or "").strip()
+        template_id = int(raw_tid) if raw_tid.isdigit() else None
+ 
+        # Skip if already exists
+        cursor.execute(
+            "SELECT cache_id FROM global_vector_cache WHERE clean_name = %s",
+            (raw_name,),
+        )
+        if cursor.fetchone():
+            skipped += 1
+            continue
+ 
+        # Generate embedding
+        try:
+            embedding = _generate_embedding(raw_name)
+        except Exception as exc:
+            errors.append({"row": i, "clean_name": raw_name, "error": str(exc)})
+            continue
+ 
+        embedding_str = "[" + ",".join(str(v) for v in embedding) + "]"
+ 
+        try:
+            cursor.execute(
+                """
+                INSERT INTO global_vector_cache
+                    (clean_name, target_template_id, embedding, approval_count, is_verified)
+                VALUES (%s, %s, %s::vector, 1, false)
+                """,
+                (raw_name, template_id, embedding_str),
+            )
+            inserted += 1
+        except Exception as exc:
+            conn.rollback()
+            errors.append({"row": i, "clean_name": raw_name, "error": str(exc)})
+ 
+    conn.commit()
+    cursor.close()
+    conn.close()
+ 
+    return {"inserted": inserted, "skipped": skipped, "errors": errors}
+ 
+ 
+# ======================================================================
+# GLOBAL KEYWORD RULES  —  3 endpoints
+# ======================================================================
+ 
+@app.get("/api/global-keyword-rules")
+def get_global_keyword_rules():
+    """Returns every row in global_keyword_rules ordered by keyword."""
+    conn = get_connection()
+    cursor = get_cursor(conn)
+ 
+    cursor.execute("""
+        SELECT
+            keyword_id,
+            keyword,
+            target_template_id,
+            match_type,
+            priority,
+            hit_count,
+            is_active,
+            created_at,
+            updated_at
+        FROM global_keyword_rules
+        ORDER BY keyword ASC
+    """)
+    rows = cursor.fetchall()
+ 
+    cursor.close()
+    conn.close()
+    return rows
+ 
+ 
+@app.post("/api/global-keyword-rules")
+def create_keyword_rule(req: KeywordRuleCreateRequest):
+    """
+    Single manual entry.
+    Accepts { keyword, target_template_id?, match_type?, priority?, is_active? }.
+    Stores as-is — NO embedding is generated.
+    Returns the newly created row or a JSON error.
+    """
+    keyword = req.keyword.strip().upper()
+    if not keyword:
+        return JSONResponse(status_code=400, content={"error": "keyword is required."})
+ 
+    valid_match_types = {"CONTAINS", "EXACT", "STARTS_WITH", "ENDS_WITH"}
+    match_type = req.match_type.upper()
+    if match_type not in valid_match_types:
+        return JSONResponse(
+            status_code=400,
+            content={"error": f"match_type must be one of: {', '.join(sorted(valid_match_types))}"},
+        )
+ 
+    priority = max(0, min(100, req.priority))
+ 
+    conn = get_connection()
+    cursor = get_cursor(conn)
+ 
+    cursor.execute(
+        """
+        INSERT INTO global_keyword_rules
+            (keyword, target_template_id, match_type, priority, hit_count, is_active)
+        VALUES (%s, %s, %s, %s, 0, %s)
+        RETURNING
+            keyword_id, keyword, target_template_id,
+            match_type, priority, hit_count,
+            is_active, created_at, updated_at
+        """,
+        (keyword, req.target_template_id, match_type, priority, req.is_active),
+    )
+    new_row = cursor.fetchone()
+    conn.commit()
+    cursor.close()
+    conn.close()
+ 
+    return new_row
+ 
+ 
+@app.post("/api/global-keyword-rules/bulk")
+async def bulk_create_keyword_rules(file: UploadFile = File(...)):
+    """
+    CSV bulk import for global_keyword_rules.
+    Required CSV column  : keyword
+    Optional CSV columns : target_template_id, match_type, priority
+    No embedding generated — rows stored as-is.
+    Returns { inserted, skipped, errors }.
+    """
+    if not (file.filename or "").endswith(".csv"):
+        return JSONResponse(status_code=400, content={"error": "Only .csv files are accepted."})
+ 
+    contents = await file.read()
+    reader = csv.DictReader(io.StringIO(contents.decode("utf-8", errors="replace")))
+ 
+    if "keyword" not in (reader.fieldnames or []):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "CSV must contain a 'keyword' column."},
+        )
+ 
+    valid_match_types = {"CONTAINS", "EXACT", "STARTS_WITH", "ENDS_WITH"}
+    inserted = 0
+    skipped  = 0
+    errors   = []
+ 
+    conn = get_connection()
+    cursor = get_cursor(conn)
+ 
+    for i, row in enumerate(reader, start=2):
+        keyword = (row.get("keyword") or "").strip().upper()
+        if not keyword:
+            skipped += 1
+            continue
+ 
+        raw_tid      = (row.get("target_template_id") or "").strip()
+        raw_mt       = (row.get("match_type") or "CONTAINS").strip().upper()
+        raw_priority = (row.get("priority") or "90").strip()
+ 
+        template_id = int(raw_tid)      if raw_tid.isdigit()      else None
+        match_type  = raw_mt            if raw_mt in valid_match_types else "CONTAINS"
+        priority    = int(raw_priority) if raw_priority.isdigit()  else 90
+        priority    = max(0, min(100, priority))
+ 
+        try:
+            cursor.execute(
+                """
+                INSERT INTO global_keyword_rules
+                    (keyword, target_template_id, match_type, priority, hit_count, is_active)
+                VALUES (%s, %s, %s, %s, 0, true)
+                """,
+                (keyword, template_id, match_type, priority),
+            )
+            inserted += 1
+        except Exception as exc:
+            conn.rollback()
+            errors.append({"row": i, "keyword": keyword, "error": str(exc)})
+ 
+    conn.commit()
+    cursor.close()
+    conn.close()
+ 
+    return {"inserted": inserted, "skipped": skipped, "errors": errors}
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
