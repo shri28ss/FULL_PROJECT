@@ -72,6 +72,24 @@ const getFrequentlyChangedDocs = async (req, res) => {
     }
 };
 
+// ─── COA Modules Management ───────────────────────────────────────────────────
+
+const deleteModule = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { error } = await supabase
+            .from('coa_modules')
+            .delete()
+            .eq('module_id', id);
+
+        if (error) throw error;
+        return res.status(200).json({ success: true, message: 'Module deleted' });
+    } catch (err) {
+        console.error('❌ deleteModule error:', err);
+        return res.status(500).json({ error: 'Failed to delete module' });
+    }
+};
+
 // ─── Global Keyword Rules Management ──────────────────────────────────────────
 
 const getGlobalKeywordRules = async (req, res) => {
@@ -282,10 +300,11 @@ const deleteVectorCacheEntry = async (req, res) => {
     }
 };
 
-module.exports = { 
+module.exports = {
     getReviewDocuments,
     getRandomQCResults,
     getFrequentlyChangedDocs,
+    deleteModule,
     getGlobalKeywordRules,
     createKeywordRule,
     bulkCreateKeywordRules,

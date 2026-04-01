@@ -67,8 +67,12 @@ const AmountEditor = ({ txn, onSave, onCancel }) => {
 const Transactions = () => {
   const { toasts, showToast } = useToast();
   const [isUploadOpen, setIsUploadOpen] = useState(false);
-  const [isCategorizing, setIsCategorizing] = useState(false);
-  const [categoriseStatus, setCategoriseStatus] = useState('');
+  const [isCategorizing, setIsCategorizing] = useState(() => {
+    return localStorage.getItem('isCategorizing') === 'true';
+  });
+  const [categoriseStatus, setCategoriseStatus] = useState(() => {
+    return localStorage.getItem('categoriseStatus') || '';
+  });
   const [isApprovingBulk, setIsApprovingBulk] = useState(false);
   const [transactions, setTransactions] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -156,6 +160,11 @@ const Transactions = () => {
   // Populate filter options once on mount
   useEffect(() => {
     fetchTransactions('ALL');
+
+    // Check if categorization was running when user left - show notification
+    if (localStorage.getItem('isCategorizing') === 'true') {
+      showToast('Categorization is still running in the background. You can continue using the app.', 'info');
+    }
 
     const loadFilterOptions = async () => {
       const { data: { user } } = await supabase.auth.getUser();
@@ -259,7 +268,11 @@ const Transactions = () => {
       return;
     }
     setIsCategorizing(true);
+    localStorage.setItem('isCategorizing', 'true');
     setCategoriseStatus('Starting…');
+    localStorage.setItem('categoriseStatus', 'Starting…');
+    showToast('Categorization started. You can continue using other parts of the app.', 'info');
+
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const response = await fetch(`${API_BASE_URL}/api/transactions/categorize-bulk`, {
@@ -286,7 +299,10 @@ const Transactions = () => {
           if (!line.startsWith('data: ')) continue;
           try {
             const payload = JSON.parse(line.slice(6));
-            if (payload.message) setCategoriseStatus(payload.message);
+            if (payload.message) {
+              setCategoriseStatus(payload.message);
+              localStorage.setItem('categoriseStatus', payload.message);
+            }
             if (payload.done) {
               showToast('✅ Bulk categorise success!', 'success');
               fetchTransactions(activeFilter, true);
@@ -302,7 +318,9 @@ const Transactions = () => {
       showToast('Failed to categorise transactions', 'error');
     } finally {
       setIsCategorizing(false);
+      localStorage.removeItem('isCategorizing');
       setCategoriseStatus('');
+      localStorage.removeItem('categoriseStatus');
     }
   };
 
@@ -543,26 +561,31 @@ const Transactions = () => {
   };
 
   const handleSimilarIndividualApprove = async (txn) => {
-    const account = similarAccountOverrides[txn.transaction_id] || similarSuggestedAccount;
-    const { data: { session } } = await supabase.auth.getSession();
+    try {
+      const account = similarAccountOverrides[txn.transaction_id] || similarSuggestedAccount;
+      const { data: { session } } = await supabase.auth.getSession();
 
-    await fetch(`${API_BASE_URL}/api/transactions/${txn.transaction_id}/recategorize`, {
-      method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${session?.access_token || ''}`
-      },
-      body: JSON.stringify({ offset_account_id: account.account_id })
-    });
+      await fetch(`${API_BASE_URL}/api/transactions/${txn.transaction_id}/recategorize`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session?.access_token || ''}`
+        },
+        body: JSON.stringify({ offset_account_id: account.account_id })
+      });
 
-    await fetch(`${API_BASE_URL}/api/transactions/${txn.transaction_id}/approve`, {
-      method: 'PATCH',
-      headers: { 'Authorization': `Bearer ${session?.access_token || ''}` }
-    });
+      await fetch(`${API_BASE_URL}/api/transactions/${txn.transaction_id}/approve`, {
+        method: 'PATCH',
+        headers: { 'Authorization': `Bearer ${session?.access_token || ''}` }
+      });
 
-    setSimilarTxns(prev => prev.filter(t => t.transaction_id !== txn.transaction_id));
-    if (similarTxns.length === 1) {
-      fetchTransactions(activeFilter, true);
+      setSimilarTxns(prev => {
+        const remaining = prev.filter(t => t.transaction_id !== txn.transaction_id);
+        if (remaining.length === 0) fetchTransactions(activeFilter, true);
+        return remaining;
+      });
+    } catch (err) {
+      showToast('Failed to approve transaction', 'error');
     }
   };
 
@@ -1067,12 +1090,16 @@ const Transactions = () => {
               <div>
                 <h2>Similar Transactions Found</h2>
                 <p className="similar-subtitle">
-                  We found {similarTxns.length} similar pending transaction
-                  {similarTxns.length > 1 ? 's' : ''}.
-                  Suggested account: <strong>{similarSuggestedAccount?.account_name}</strong>
+                  {similarTxns.length} similar pending transaction{similarTxns.length > 1 ? 's' : ''} —
+                  suggested account: <strong>{similarSuggestedAccount?.account_name}</strong>
                 </p>
               </div>
-              <button className="modal-close-btn" onClick={() => setSimilarTxns([])}>✕</button>
+              <button
+                className="modal-close-btn"
+                onClick={() => setSimilarTxns([])}
+                style={{ background: 'none', border: 'none', fontSize: '20px',
+                         cursor: 'pointer', color: 'var(--text-secondary)' }}
+              >✕</button>
             </div>
 
             <div className="similar-txns-list">
@@ -1081,15 +1108,18 @@ const Transactions = () => {
                 return (
                   <div key={txn.transaction_id} className="similar-txn-row">
                     <div className="similar-txn-date">
-                      {new Date(txn.transaction_date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}
+                      {new Date(txn.transaction_date).toLocaleDateString('en-IN',
+                        { day: '2-digit', month: 'short' })}
                     </div>
-                    <div className="similar-txn-details">{txn.details}</div>
+                    <div className="similar-txn-details" title={txn.details}>
+                      {txn.details}
+                    </div>
                     <div className="similar-txn-amount">
                       {txn.transaction_type === 'DEBIT' ? '−' : '+'}
                       ₹{(txn.amount || 0).toLocaleString('en-IN')}
                     </div>
                     <div className="similar-txn-from">
-                      <span className="similar-from-label">
+                      <span className="similar-from-label" title={txn.current_account?.account_name}>
                         {txn.current_account?.account_name || '—'}
                       </span>
                       <span className="similar-arrow">→</span>
@@ -1117,14 +1147,11 @@ const Transactions = () => {
             </div>
 
             <div className="similar-txns-footer">
-              <button
-                className="action-btn"
-                onClick={() => setSimilarTxns([])}
-              >
+              <button className="action-btn" onClick={() => setSimilarTxns([])}>
                 Dismiss
               </button>
               <button
-                className={`action-btn approve-selected has-selection`}
+                className="action-btn approve-selected has-selection"
                 onClick={handleSimilarBulkConfirm}
                 disabled={isApprovingSimilar}
               >
@@ -1137,7 +1164,6 @@ const Transactions = () => {
 
           </div>
 
-          {/* Inline account picker for per-row override */}
           {similarPickerTarget && (
             <AccountPickerModal
               onClose={() => setSimilarPickerTarget(null)}
