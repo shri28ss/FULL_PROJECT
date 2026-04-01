@@ -12,8 +12,6 @@ import random
 import logging
 from db.connection import get_connection, get_cursor
 from services.reconciliation_service import reconcile_transactions
-from services.llm_parser import parse_with_llm
-from services.validation_service import extract_json_from_response
 from services.pdf_service import extract_full_text
 from services.extraction_service import extract_transactions_using_logic
 
@@ -177,8 +175,12 @@ def run_random_qc(sample_size=1):
     """
     Main function called by the scheduler.
     Picks random ACTIVE documents, gets stored Code transactions,
-    checks for existing LLM transactions (calls LLM if missing),
-    reconciles them, and saves QC results.
+    and reconciles them with existing LLM transactions.
+
+    Two cases:
+    - Case 1 (new format at upload time): Both CODE and LLM transactions exist → reconcile them.
+    - Case 2 (format was already ACTIVE at upload time): Only CODE transactions exist,
+      LLM was never called → skip this document (no LLM baseline to compare against).
     """
     logger.info(f"Starting random QC check (sample_size={sample_size})...")
     
@@ -286,22 +288,20 @@ def run_random_qc(sample_size=1):
             # 3c. Get STORED LLM transactions from DB
             llm_txns = _get_stored_transactions(doc_id, "LLM")
             
-            # 3d. If no LLM transactions → call LLM parser and save them
+            # 3d. If no LLM transactions exist, this is a Case 2 document:
+            #     the format was already ACTIVE when the document was uploaded,
+            #     so LLM was never called. There is no LLM baseline to compare
+            #     against, so skip QC for this document entirely.
             if not llm_txns:
-                logger.info(f"  No LLM transactions found for doc {doc_id}. Calling LLM parser...")
-                identifier_json = safe_json_loads(identifier_json_str) if isinstance(identifier_json_str, str) else identifier_json_str
-                llm_response = parse_with_llm(pdf_text, identifier_json)
-                llm_txns = extract_json_from_response(llm_response)
-                
-                # Save the LLM transactions to ai_transactions_staging
-                if llm_txns:
-                    _save_llm_transactions(doc_id, stmt_id, llm_txns)
-                    logger.info(f"  LLM extracted {len(llm_txns)} transactions. Saved to staging.")
-                else:
-                    logger.warning(f"  LLM returned no transactions for doc {doc_id}.")
-                    llm_txns = []
-            else:
-                logger.info(f"  Found {len(llm_txns)} existing LLM transactions in DB.")
+                logger.info(
+                    f"  Skipping doc {doc_id}: no LLM transactions found. "
+                    "This document was processed with an already-active format "
+                    "(Case 2) — LLM was not invoked at upload time, so there is "
+                    "nothing to reconcile against."
+                )
+                continue
+            
+            logger.info(f"  Found {len(llm_txns)} existing LLM transactions in DB.")
             
             # 3e. Reconcile Code vs LLM
             reconciliation = reconcile_transactions(code_txns, llm_txns)
