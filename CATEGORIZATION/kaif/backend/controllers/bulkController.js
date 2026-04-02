@@ -8,16 +8,6 @@ const llmBatchFallback = require('../services/llmBatchFallback');
 
 const ML_SERVICE_URL = process.env.ML_SERVICE_URL || `http://127.0.0.1:${process.env.PYTHON_PORT || 5000}`;
 
-/**
- * ACCOUNT FIELD CONVENTION:
- *   base_account_id   = SOURCE bank/card/wallet account the statement belongs to
- *                       Comes from uncategorized_transactions.account_id (matched at upload)
- *   offset_account_id = CATEGORY account assigned by the pipeline
- *                       (Rent, Groceries, Salary, etc.)
- *
- * Pipeline stages write category results to offset_account_id.
- * account_id is never overwritten so the source account is always preserved.
- */
 async function processUploadSSE(req, res) {
   try {
     res.setHeader('Content-Type', 'text/event-stream');
@@ -301,15 +291,20 @@ async function processUploadSSE(req, res) {
         creditCount: creditLeftovers.length
       });
 
-      // Process DEBIT transactions (money out) - show only DEBIT nature accounts
+      // Process DEBIT transactions (money out) - show only leaf EXPENSE accounts.
+      // Excludes:
+      //   - is_system_generated=true: parent/group headers (Living Expenses, Financial Charges, etc.)
+      //   - ASSET accounts: balance-sheet items (EPF, PPF, Vehicle, Property) are caught by
+      //     earlier pipeline stages (keyword rules, vector match) and never reach LLM fallback.
       if (debitLeftovers.length > 0) {
         const { data: debitAccounts } = await supabase
           .from('accounts')
           .select('account_id, account_name, balance_nature')
           .eq('user_id', userId)
           .eq('is_active', true)
+          .eq('is_system_generated', false)
           .eq('balance_nature', 'DEBIT')
-          .in('account_type', ['EXPENSE', 'ASSET'])
+          .eq('account_type', 'EXPENSE')
           .not('account_name', 'in', '("Uncategorised Expense")');
 
         const debitCategories = debitAccounts || [];
@@ -341,15 +336,20 @@ async function processUploadSSE(req, res) {
         }
       }
 
-      // Process CREDIT transactions (money in) - show only CREDIT nature accounts
+      // Process CREDIT transactions (money in) - show only leaf INCOME accounts.
+      // Excludes:
+      //   - is_system_generated=true: parent/group headers (Employment Income, Other Income, etc.)
+      //   - LIABILITY/EQUITY accounts: loan repayments, credit card payments, equity entries are
+      //     handled by earlier pipeline stages and are not valid LLM categorization targets.
       if (creditLeftovers.length > 0) {
         const { data: creditAccounts } = await supabase
           .from('accounts')
           .select('account_id, account_name, balance_nature')
           .eq('user_id', userId)
           .eq('is_active', true)
+          .eq('is_system_generated', false)
           .eq('balance_nature', 'CREDIT')
-          .in('account_type', ['INCOME', 'LIABILITY', 'EQUITY'])
+          .eq('account_type', 'INCOME')
           .not('account_name', 'in', '("Uncategorised Income")');
 
         const creditCategories = creditAccounts || [];
