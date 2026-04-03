@@ -39,10 +39,10 @@ const Sidebar = ({
   const getFullName = () => user?.user_metadata?.full_name || user?.email?.split('@')[0] || 'User';
 
   const menuItems = [
-    { path: '/parsing',      label: 'Parsing',       icon: <ICONS.Dashboard /> },
+    { path: '/',             label: 'Parsing',       icon: <ICONS.Dashboard /> },
     { path: '/transactions', label: 'Transactions',  icon: <ICONS.Transactions /> },
     { path: '/accounts',     label: 'Accounts',      icon: <ICONS.Accounts /> },
-    { path: '/',             label: 'Overview',      icon: <ICONS.Dashboard /> },
+    { path: '/overview',     label: 'Overview',      icon: <ICONS.Dashboard /> },
     { path: '/analytics',    label: 'Analytics',     icon: <ICONS.Analytics /> },
   ];
 
@@ -59,7 +59,7 @@ const Sidebar = ({
 
   const isActive = (path) => {
     if (path.startsWith('/review')) return location.pathname.startsWith('/review');
-    return path === '/' ? location.pathname === '/' : location.pathname.startsWith(path);
+    return location.pathname === path;
   };
 
   return (

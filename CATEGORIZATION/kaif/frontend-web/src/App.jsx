@@ -148,11 +148,12 @@ function App() {
                  )}
               </ProtectedRoute>
           }>
-               <Route index element={<Overview />} />
+               <Route index element={<ParsingPage />} />
+               <Route path="parsing" element={<ParsingPage />} />
                <Route path="transactions" element={<Transactions />} />
                <Route path="accounts" element={<Accounts />} />
+               <Route path="overview" element={<Overview />} />
                <Route path="analytics" element={<Analytics />} />
-               <Route path="parsing" element={<ParsingPage />} />
                <Route path="review" element={<ReviewPage />} />
           </Route>
 
