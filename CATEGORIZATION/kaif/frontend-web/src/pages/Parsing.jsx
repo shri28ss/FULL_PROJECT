@@ -394,7 +394,48 @@ export default function ParsingPage() {
                                 </td>
                                 <td style={{ textAlign: 'center' }}><span style={{ background: '#fef3c7', color: '#92400e', padding: '2px 8px', borderRadius: '20px', fontSize: '0.7rem', fontWeight: 800 }}>{doc.transaction_parsed_type || 'CODE'}</span></td>
                                 <td style={{ textAlign: 'center', fontSize: '0.8rem' }}>{new Date(doc.created_at).toLocaleDateString()}</td>
-                                <td style={{ textAlign: 'center', padding: '1rem 2rem' }}><div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'center' }}><button onClick={() => { navigate(`/review?id=${doc.document_id}`); clearActiveDoc(); }} style={{ background: 'none', border: '1px solid var(--border-color)', padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem', color: 'var(--primary-action)', fontWeight: 600, cursor: 'pointer' }}><TableIcon size={12} style={{ marginRight: '4px' }} /> Transactions</button><button onClick={() => handleDeleteDocument(doc.document_id, doc.file_name)} style={{ background: 'none', border: '1px solid #fecaca', padding: '4px 8px', borderRadius: '6px', color: '#e74c3c', cursor: 'pointer' }}><Trash2 size={12} /></button></div></td>
+                                <td style={{ textAlign: 'center', padding: '1rem 2rem' }}>
+                                    <div style={{ display: 'flex', gap: '0.6rem', justifyContent: 'center' }}>
+                                        <button 
+                                            onClick={() => { navigate(`/review?id=${doc.document_id}`); clearActiveDoc(); }} 
+                                            style={{ 
+                                                background: 'none', 
+                                                border: '1px solid var(--border-color)', 
+                                                padding: '6px 12px', 
+                                                borderRadius: '8px', 
+                                                fontSize: '0.75rem', 
+                                                color: 'var(--primary-action)', 
+                                                fontWeight: 700, 
+                                                cursor: 'pointer',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                gap: '6px',
+                                                transition: 'all 0.2s'
+                                            }}
+                                        >
+                                            <TableIcon size={14} /> Transactions
+                                        </button>
+                                        <button 
+                                            onClick={() => handleDeleteDocument(doc.document_id, doc.file_name)} 
+                                            style={{ 
+                                                background: 'rgba(231, 76, 60, 0.05)', 
+                                                border: '1px solid #fecaca', 
+                                                padding: '6px 10px', 
+                                                borderRadius: '8px', 
+                                                color: '#e74c3c', 
+                                                cursor: 'pointer',
+                                                transition: 'all 0.2s',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center'
+                                            }}
+                                            onMouseOver={(e) => e.currentTarget.style.transform = 'scale(1.1)'}
+                                            onMouseOut={(e) => e.currentTarget.style.transform = 'scale(1)'}
+                                        >
+                                            <Trash2 size={16} />
+                                        </button>
+                                    </div>
+                                </td>
                             </tr>
                         ))}
                     </tbody>
@@ -410,7 +451,18 @@ export default function ParsingPage() {
                         </div>
                         <h3 style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '0.75rem' }}>Delete Document?</h3>
                         <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', marginBottom: '2.5rem', lineHeight: 1.6 }}>
-                            Are you sure you want to delete <br/><b style={{ color: 'var(--primary-action)' }}>"{deleteTarget.name}"</b>? <br/>This will permanently remove all associated transactions.
+                            Are you sure you want to delete <br/>
+                            <b style={{ 
+                                color: 'var(--primary-action)', 
+                                display: 'block', 
+                                margin: '8px 0', 
+                                overflowWrap: 'anywhere',
+                                wordBreak: 'break-word',
+                                padding: '0 10px'
+                            }}>
+                                "{deleteTarget.name}"?
+                            </b>
+                            This action will permanently remove all associated transactions.
                         </p>
                         <div style={{ display: 'flex', gap: '1rem' }}>
                             <button onClick={() => setDeleteTarget(null)} style={{ flex: 1, padding: '0.875rem', borderRadius: '12px', border: '1px solid var(--glass-border)', background: 'var(--bg-primary)', fontWeight: 700, cursor: 'pointer', color: 'var(--text-secondary)', transition: 'all 0.2s' }}>Cancel</button>

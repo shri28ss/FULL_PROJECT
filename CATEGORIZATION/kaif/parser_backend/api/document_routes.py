@@ -672,13 +672,21 @@ async def delete_document(document_id: int, user=Depends(get_current_user)):
             except Exception as e:
                 logger.warning("Could not delete local file %s: %s", file_path, e)
 
-    # Delete child records then the document
-    sb.table("ai_transactions_staging").delete().eq("document_id", document_id).execute()
-    sb.table("uncategorized_transactions").delete().eq("document_id", document_id).execute()
-    sb.table("documents").delete().eq("document_id", document_id).eq("user_id", user_id).execute()
-
-    logger.info("Document %s deleted by user %s", document_id, user_id)
-    return {"message": "Document deleted successfully"}
+    # Delete child records safely
+    try:
+        # Use simple delete without assuming response data content
+        sb.table("ai_transactions_staging").delete().eq("document_id", document_id).execute()
+        sb.table("uncategorized_transactions").delete().eq("document_id", document_id).execute()
+        sb.table("document_password").delete().eq("document_id", document_id).execute()
+        
+        # Finally delete the document record
+        sb.table("documents").delete().eq("document_id", document_id).eq("user_id", user_id).execute()
+        
+        logger.info("Document %s deleted by user %s", document_id, user_id)
+        return {"message": "Document deleted successfully"}
+    except Exception as e:
+        logger.error("Database deletion failed for doc %s: %s", document_id, e)
+        raise HTTPException(status_code=500, detail=f"Database deletion failed: {str(e)}")
 
 
 @router.get("/{document_id}/download-json")
