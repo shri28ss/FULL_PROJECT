@@ -3,6 +3,7 @@ import { Outlet } from 'react-router-dom';
 import Sidebar from '../components/Sidebar';
 import Settings from '../components/pages/Settings';
 import { signOut } from '../shared/authService';
+import LedgerBuddy from '../components/chatbot/LedgerBuddy';
 import '../styles/Dashboard.css';
 
 const AppLayout = ({ user, toggleTheme, isDarkMode }) => {
@@ -41,6 +42,9 @@ const AppLayout = ({ user, toggleTheme, isDarkMode }) => {
       {isSettingsOpen && (
         <Settings onClose={() => setIsSettingsOpen(false)} />   // ← now reachable
       )}
+
+      {/* LedgerBuddy AI Assistant */}
+      <LedgerBuddy user={user} isDarkMode={isDarkMode} />
     </div>
   );
 };

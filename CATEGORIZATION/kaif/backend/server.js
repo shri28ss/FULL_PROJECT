@@ -6,6 +6,7 @@ require('dotenv').config();
 const logger = require('./utils/logger');
 const transactionRoutes = require('./routes/transactionRoutes');
 const qcRoutes = require('./routes/qcRoutes');
+const chatRoutes = require('./routes/chatRoutes');
 const rulesEngineService = require('./services/rulesEngineService');
 
 const app = express();
@@ -55,6 +56,7 @@ app.use('/api/transactions/upload-bulk', limiter);
 // ==========================================
 app.use('/api/transactions', transactionRoutes);
 app.use('/api/qc', qcRoutes);
+app.use('/api/chat', chatRoutes);
 
 // ==========================================
 // 🧪 HEALTH CHECK / QC

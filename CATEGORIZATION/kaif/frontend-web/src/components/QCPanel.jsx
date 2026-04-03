@@ -3,13 +3,17 @@ import { useOutletContext } from 'react-router-dom';
 import { supabase } from '../shared/supabase';
 import { 
   Package, Tag, Database, History, 
-  LayoutDashboard, Loader2, LogOut, ShieldCheck
+  LayoutDashboard, Loader2, LogOut, ShieldCheck,
+  FileText, Zap, ShieldAlert
 } from 'lucide-react';
 
 // Subcomponents
 import CoaLibraryTab from './CoaLibraryTab';
 import KeywordRulesTab from './KeywordRulesTab';
 import VectorCacheTab from './VectorCacheTab';
+import ReviewDocumentTab from './ReviewDocumentTab';
+import RandomQCTab from './RandomQCTab';
+import FrequentlyChangedTab from './FrequentlyChangedTab';
 
 const CAT_COLORS = {
   'MANUAL': '#3b82f6',
@@ -102,6 +106,9 @@ const QCPanel = () => {
       <nav style={styles.navBar}>
         {[
           { id: 'COA_LIBRARY', label: 'COA Library', icon: <Package size={14}/> },
+          { id: 'REVIEW_DOCS', label: 'Review Documents', icon: <FileText size={14}/> },
+          { id: 'RANDOM_QC', label: 'Random QC', icon: <ShieldCheck size={14}/> },
+          { id: 'FREQ_CHANGED', label: 'Frequently Changed', icon: <Zap size={14}/> },
           { id: 'AUDIT_QUEUE', label: 'Audit Queue', icon: <History size={14}/> },
           { id: 'KEYWORD_RULES', label: 'Keyword Rules', icon: <Tag size={14}/> },
           { id: 'VECTOR_CACHE', label: 'Vector Cache', icon: <Database size={14}/> },
@@ -120,6 +127,9 @@ const QCPanel = () => {
       {/* ── Main Workspace ── */}
       <main style={styles.workspace}>
         {activeTab === 'COA_LIBRARY' && <CoaLibraryTab />}
+        {activeTab === 'REVIEW_DOCS' && <ReviewDocumentTab />}
+        {activeTab === 'RANDOM_QC' && <RandomQCTab />}
+        {activeTab === 'FREQ_CHANGED' && <FrequentlyChangedTab />}
         {activeTab === 'KEYWORD_RULES' && <KeywordRulesTab />}
         {activeTab === 'VECTOR_CACHE' && <VectorCacheTab />}
         {activeTab === 'AUDIT_QUEUE' && (
