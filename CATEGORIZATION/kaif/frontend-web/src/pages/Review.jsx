@@ -134,7 +134,7 @@ export default function ReviewPage() {
     if (isLoading) {
         return (
             <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '60vh' }}>
-                <Loader2 className="spin-icon" size={48} color="#483EA8" />
+                <Loader2 className="spin-icon" size={48} color="var(--primary-action)" />
             </div>
         );
     }
@@ -147,8 +147,8 @@ export default function ReviewPage() {
                     marginTop: '1rem',
                     padding: '0.5rem 1.5rem',
                     background: 'none',
-                    border: '2px solid #483EA8',
-                    color: '#483EA8',
+                    border: '2px solid var(--primary-action)',
+                    color: 'var(--primary-action)',
                     borderRadius: '8px',
                     fontWeight: 600,
                     cursor: 'pointer'
@@ -196,10 +196,10 @@ export default function ReviewPage() {
                             <tr key={i} style={{ borderTop: '1px solid var(--border-color)' }}>
                                 <td style={{ padding: '1rem 1.5rem', whiteSpace: 'nowrap', color: 'var(--text-primary)' }}>{tx.date || '-'}</td>
                                 <td style={{ padding: '1rem', maxWidth: '500px', wordWrap: 'break-word', whiteSpace: 'normal', color: 'var(--text-primary)' }}>{tx.details || '-'}</td>
-                                <td style={{ padding: '1rem', textAlign: 'right', color: tx.debit ? '#e74c3c' : '#d1d5db', fontWeight: tx.debit ? 600 : 400 }}>
+                                <td style={{ padding: '1rem', textAlign: 'right', color: tx.debit ? '#F87171' : 'var(--text-secondary)', fontWeight: tx.debit ? 600 : 400 }}>
                                     {tx.debit ? tx.debit.toLocaleString() : '-'}
                                 </td>
-                                <td style={{ padding: '1rem', textAlign: 'right', color: tx.credit ? '#27ae60' : '#d1d5db', fontWeight: tx.credit ? 600 : 400 }}>
+                                <td style={{ padding: '1rem', textAlign: 'right', color: tx.credit ? '#34D399' : 'var(--text-secondary)', fontWeight: tx.credit ? 600 : 400 }}>
                                     {tx.credit ? tx.credit.toLocaleString() : '-'}
                                 </td>
                                 <td style={{ padding: '1rem', textAlign: 'right', fontWeight: 600, color: 'var(--text-primary)' }}>
@@ -286,8 +286,8 @@ export default function ReviewPage() {
                         style={{
                             padding: '0.5rem 1.5rem',
                             background: 'none',
-                            color: '#483EA8',
-                            border: '2px solid #483EA8',
+                            color: 'var(--primary-action)',
+                            border: '2px solid var(--primary-action)',
                             borderRadius: '10px',
                             fontWeight: 700,
                             fontSize: '0.85rem',
@@ -308,8 +308,8 @@ export default function ReviewPage() {
                             style={{
                                 padding: '0.5rem 2rem',
                                 background: 'transparent',
-                                color: '#27ae60',
-                                border: '2px solid #27ae60',
+                                color: 'var(--accent-color)',
+                                border: '2px solid var(--accent-color)',
                                 borderRadius: '10px',
                                 fontWeight: 700,
                                 fontSize: '0.85rem',
@@ -329,7 +329,7 @@ export default function ReviewPage() {
                             disabled={isApproving}
                             style={{
                                 padding: '0.5rem 2rem',
-                                background: '#483EA8',
+                                background: 'var(--primary-action)',
                                 color: 'white',
                                 border: 'none',
                                 borderRadius: '10px',
@@ -369,7 +369,7 @@ export default function ReviewPage() {
                         display: 'flex', alignItems: 'center', justifyContent: 'center',
                         flexShrink: 0,
                     }}>
-                        <Link size={16} color={accountLinked ? '#27ae60' : '#483EA8'} />
+                        <Link size={16} color={accountLinked ? 'var(--accent-color)' : 'var(--primary-action)'} />
                     </div>
 
                     <div style={{ flex: 1, minWidth: 0 }}>
@@ -423,7 +423,7 @@ export default function ReviewPage() {
                     {accountLinked ? (
                         <span style={{
                             fontSize: '0.7rem', fontWeight: 700,
-                            color: '#27ae60', background: '#e8f5e9',
+                            color: 'var(--accent-color)', background: 'rgba(127, 175, 138, 0.1)',
                             padding: '3px 10px', borderRadius: '50px', flexShrink: 0,
                         }}>
                             ✓ Linked
@@ -434,7 +434,7 @@ export default function ReviewPage() {
                             disabled={!selectedAccountId || isLinkingAccount || isApproved}
                             style={{
                                 padding: '0.4rem 1.1rem',
-                                background: selectedAccountId ? '#483EA8' : '#e5e7eb',
+                                background: selectedAccountId ? 'var(--primary-action)' : '#e5e7eb',
                                 color: selectedAccountId ? '#fff' : '#9ca3af',
                                 border: 'none',
                                 borderRadius: '8px',
@@ -464,12 +464,12 @@ export default function ReviewPage() {
                     {renderTransactionTable(
                         data.code_transactions,
                         "Extracted by Code",
-                        <Code size={18} style={{ color: '#27ae60' }} />
+                        <Code size={18} style={{ color: 'var(--accent-color)' }} />
                     )}
                     {renderTransactionTable(
                         data.llm_transactions,
                         "Extracted by LLM",
-                        <Cpu size={18} style={{ color: '#483EA8' }} />
+                        <Cpu size={18} style={{ color: 'var(--primary-action)' }} />
                     )}
                 </div>
 
@@ -482,7 +482,7 @@ export default function ReviewPage() {
                         padding: '1.5rem'
                     }}>
                         <h3 style={{ fontSize: '0.95rem', marginBottom: '1rem', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '0.5rem', margin: '0 0 1rem 0' }}>
-                            <FileSearch size={18} style={{ color: '#483EA8' }} /> Identifier Config
+                            <FileSearch size={18} style={{ color: 'var(--primary-action)' }} /> Identifier Config
                         </h3>
                         <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>
                             Detected pattern configuration used for this statement format.

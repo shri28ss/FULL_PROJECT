@@ -10,14 +10,14 @@ import { useParsing, extractionSteps } from "../context/ParsingContext";
 
 // ── Circular Processing Indicator ────────────────────────────────────────────
 const STAGE_META = {
-    UPLOADED:                  { label: "Initializing",                       sub: "Setting up extraction workspace...",                                   color: "#483EA8", pct: 10 },
-    UPLOADING:                 { label: "Uploading",                          sub: "Sending file to processing server...",                                  color: "#483EA8", pct: 10 },
-    PROCESSING:                { label: "Processing",                         sub: "Enqueuing document in extraction pipeline...",                          color: "#483EA8", pct: 20 },
-    EXTRACTING_TEXT:           { label: "Extracting Text",                    sub: "Reading PDF pages and extracting raw text...",                          color: "#6366f1", pct: 33 },
-    IDENTIFYING_FORMAT:        { label: "Identifying Format",                  sub: "Matching statement format in database...",                               color: "#8b5cf6", pct: 55 },
-    PARSING_TRANSACTIONS:      { label: "Parsing Transactions",                sub: "Running Code + LLM extraction pipeline...",                              color: "#a855f7", pct: 78 },
-    PARSING_TRANSACTIONS_CODE: { label: "Extracting Transactions",             sub: "Format found in DB — using stored extraction logic (fast path)...",      color: "#0d9488", pct: 68 },
-    AWAITING_REVIEW:           { label: "Finalizing",                          sub: "Validating transactions and preparing review...",                        color: "#27ae60", pct: 100 },
+    UPLOADED:                  { label: "Initializing",                       sub: "Setting up extraction workspace...",                                   color: "var(--primary-action)", pct: 10 },
+    UPLOADING:                 { label: "Uploading",                          sub: "Sending file to processing server...",                                  color: "var(--primary-action)", pct: 10 },
+    PROCESSING:                { label: "Processing",                         sub: "Enqueuing document in extraction pipeline...",                          color: "var(--primary-action)", pct: 20 },
+    EXTRACTING_TEXT:           { label: "Extracting Text",                    sub: "Reading PDF pages and extracting raw text...",                          color: "var(--primary-action)", pct: 33 },
+    IDENTIFYING_FORMAT:        { label: "Identifying Format",                  sub: "Matching statement format in database...",                               color: "var(--primary-action)", pct: 55 },
+    PARSING_TRANSACTIONS:      { label: "Parsing Transactions",                sub: "Running Code + LLM extraction pipeline...",                              color: "var(--primary-action)", pct: 78 },
+    PARSING_TRANSACTIONS_CODE: { label: "Extracting Transactions",             sub: "Format found in DB — using stored extraction logic (fast path)...",      color: "var(--accent-color)", pct: 68 },
+    AWAITING_REVIEW:           { label: "Finalizing",                          sub: "Validating transactions and preparing review...",                        color: "var(--accent-color)", pct: 100 },
 };
 
 function CircularProgress({ processingStatus, status, elapsedSeconds, parsedType }) {
@@ -34,8 +34,8 @@ function CircularProgress({ processingStatus, status, elapsedSeconds, parsedType
         <div style={{
             display: "flex", flexDirection: "column", alignItems: "center",
             justifyContent: "center", padding: "1.5rem 1rem", gap: "1rem",
-            background: "rgba(99, 102, 241, 0.05)",
-            borderRadius: "16px", border: "1px solid rgba(99, 102, 241, 0.1)",
+            background: "var(--bg-primary)",
+            borderRadius: "16px", border: "1px solid var(--border-color)",
             margin: "0.5rem 0"
         }}>
             <div style={{ position: "relative", width: 100, height: 100 }}>
@@ -197,7 +197,16 @@ export default function ParsingPage() {
                 <h2 style={{ fontSize: '1.75rem', fontWeight: 800, color: 'var(--text-primary)' }}>Extraction Dashboard</h2>
             </div>
 
-            <div className="upload-page-card" style={{ background: 'var(--bg-secondary)', padding: '1.5rem', borderRadius: '16px', marginBottom: '2.5rem', border: '1px solid var(--border-color)' }}>
+            <div className="upload-page-card" style={{ 
+                background: 'var(--bg-secondary)', 
+                padding: '2.5rem 2rem', 
+                borderRadius: '16px', 
+                marginBottom: '2.5rem', 
+                border: '1px solid var(--border-color)',
+                maxWidth: '860px',
+                margin: '0 auto 2.5rem',
+                position: 'relative'
+            }}>
                 {activeDoc && (
                     <div style={{ marginBottom: '1.5rem' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem', marginBottom: '1.5rem' }}>
@@ -208,7 +217,7 @@ export default function ParsingPage() {
                                         <div style={{
                                             width: 28, height: 28, borderRadius: '50%',
                                             display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                            background: state === 'completed' ? '#27ae60' : state === 'active' ? '#483EA8' : 'rgba(0,0,0,0.05)',
+                                            background: state === 'completed' ? 'var(--accent-color)' : state === 'active' ? 'var(--primary-action)' : 'rgba(0,0,0,0.05)',
                                             color: state === 'pending' ? 'var(--text-secondary)' : 'white',
                                             marginBottom: '0.4rem', zIndex: 1, transition: 'all 0.3s'
                                         }}>
@@ -216,7 +225,7 @@ export default function ParsingPage() {
                                         </div>
                                         <span style={{ fontSize: '0.6rem', fontWeight: 700, color: 'var(--text-primary)', textAlign: 'center' }}>{step.label}</span>
                                         {i < extractionSteps.length - 1 && (
-                                            <div style={{ position: 'absolute', top: 14, left: '50%', width: '100%', height: 2, background: state === 'completed' ? '#27ae60' : 'rgba(0,0,0,0.05)', zIndex: 0 }} />
+                                            <div style={{ position: 'absolute', top: 14, left: '50%', width: '100%', height: 2, background: state === 'completed' ? 'var(--accent-color)' : 'rgba(0,0,0,0.05)', zIndex: 0 }} />
                                         )}
                                     </div>
                                 );
@@ -231,9 +240,9 @@ export default function ParsingPage() {
                             />
                         )}
                         {!isExtracting && activeDoc.status === "DONE" && (
-                            <div style={{ textAlign: "center", padding: "1rem", background: "rgba(39, 174, 96, 0.1)", borderRadius: "12px", border: "1px solid rgba(39, 174, 96, 0.2)" }}>
-                                <div style={{ fontWeight: 800, color: "#27ae60" }}>Ready for Review!</div>
-                                <button onClick={() => { navigate(`/review?id=${activeDoc.id}`); clearActiveDoc(); }} style={{ marginTop: "0.5rem", background: "#27ae60", color: "#fff", border: "none", padding: "0.5rem 1rem", borderRadius: "8px", fontWeight: 700, cursor: "pointer" }}>Open Transactions</button>
+                            <div style={{ textAlign: "center", padding: "1rem", background: "rgba(127, 175, 138, 0.1)", borderRadius: "12px", border: "1px solid var(--accent-color)" }}>
+                                <div style={{ fontWeight: 800, color: "var(--accent-color)" }}>Ready for Review!</div>
+                                <button onClick={() => { navigate(`/review?id=${activeDoc.id}`); clearActiveDoc(); }} style={{ marginTop: "0.5rem", background: "var(--accent-color)", color: "#fff", border: "none", padding: "0.5rem 1rem", borderRadius: "8px", fontWeight: 700, cursor: "pointer" }}>Open Transactions</button>
                             </div>
                         )}
                     </div>
@@ -241,11 +250,42 @@ export default function ParsingPage() {
 
                 {!isExtracting && (!activeDoc || activeDoc.status !== "DONE") && (
                     <>
-                        <div className="dropzone" onClick={() => fileInputRef.current.click()} style={{ minHeight: '200px', border: '2px dashed var(--border-color)', borderRadius: '12px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '1.5rem', cursor: 'pointer' }}>
+                        <div className="dropzone" 
+                            style={{ 
+                                minHeight: '180px', 
+                                border: '2px dashed var(--border-color)', 
+                                borderRadius: '12px', 
+                                display: 'flex', 
+                                flexDirection: 'column', 
+                                alignItems: 'center', 
+                                justifyContent: 'center', 
+                                padding: '1.5rem', 
+                                transition: 'all 0.2s ease',
+                                background: file ? 'rgba(99, 102, 241, 0.03)' : 'transparent',
+                                cursor: 'default'
+                            }}
+                        >
                             <input type="file" hidden ref={fileInputRef} onChange={onFileChange} accept=".pdf" />
-                            <FileUp size={40} style={{ color: '#483EA8', marginBottom: '0.75rem' }} />
-                            <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{file ? file.name : "Choose PDF Statement"}</div>
-                            <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Maximum 50MB per file</div>
+                            
+                            {!file ? (
+                                <div onClick={() => fileInputRef.current.click()} style={{ textAlign: 'center', cursor: 'pointer' }}>
+                                    <FileUp size={40} style={{ color: 'var(--primary-action)', marginBottom: '0.75rem' }} />
+                                    <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>Choose PDF Statement</div>
+                                    <div style={{ fontSize: '0.86rem', color: 'var(--text-secondary)' }}>Maximum 50MB per file</div>
+                                </div>
+                            ) : (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', background: 'var(--bg-primary)', padding: '10px 16px', borderRadius: '10px', border: '1px solid var(--border-color)', position: 'relative' }}>
+                                    <FileText size={24} style={{ color: 'var(--primary-action)' }} />
+                                    <div style={{ maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '0.9rem', fontWeight: 700 }}>{file.name}</div>
+                                    <button 
+                                        onClick={() => { setFile(null); setPassword(""); setStatus("IDLE"); setError(""); }}
+                                        style={{ background: 'rgba(231, 76, 60, 0.1)', color: '#e74c3c', border: 'none', width: '24px', height: '24px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', transition: 'all 0.2s' }}
+                                        title="Remove file"
+                                    >
+                                        <Trash2 size={14} />
+                                    </button>
+                                </div>
+                            )}
                         </div>
 
                         {needsPassword && (
@@ -260,7 +300,7 @@ export default function ParsingPage() {
                         <button 
                             disabled={!file || (needsPassword && !password)} 
                             onClick={handleUpload}
-                            style={{ width: '100%', height: '52px', marginTop: '1.5rem', borderRadius: '12px', background: (file && (!needsPassword || password)) ? '#483EA8' : '#e5e7eb', color: 'white', border: 'none', fontWeight: 700, cursor: 'pointer' }}
+                            style={{ width: '100%', height: '52px', marginTop: '1.5rem', borderRadius: '12px', background: (file && (!needsPassword || password)) ? 'var(--primary-action)' : '#e5e7eb', color: 'white', border: 'none', fontWeight: 700, cursor: 'pointer' }}
                         >
                             START EXTRACTION
                         </button>
@@ -269,9 +309,14 @@ export default function ParsingPage() {
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1rem', marginBottom: '2rem' }}>
-                {[{ label: "Total", val: stats.total, icon: FileText, col: "#483EA8" }, { label: "Success", val: stats.parsed, icon: CheckCircle, col: "#27ae60" }, { label: "Failed", val: stats.failed, icon: AlertCircle, col: "#e74c3c" }, { label: "Review", val: stats.pending_review, icon: Clock, col: "#f39c12" }].map((s, i) => (
+                {[
+                  { label: "Total", val: stats.total, icon: FileText, col: "var(--primary-action)", bg: "rgba(42, 79, 122, 0.1)" },
+                  { label: "Approved", val: stats.parsed, icon: CheckCircle, col: "var(--accent-color)", bg: "rgba(127, 175, 138, 0.15)" },
+                  { label: "Failed", val: stats.failed, icon: AlertCircle, col: "#e74c3c", bg: "rgba(231, 76, 60, 0.1)" },
+                  { label: "Pending Approval", val: stats.pending_review, icon: Clock, col: "#f39c12", bg: "rgba(243, 156, 18, 0.1)" }
+                ].map((s, i) => (
                     <div key={i} style={{ background: 'var(--bg-secondary)', borderRadius: '16px', padding: '1.25rem', border: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                        <div style={{ padding: '0.6rem', borderRadius: '10px', background: `${s.col}15`, color: s.col }}><s.icon size={20} /></div>
+                        <div style={{ padding: '0.6rem', borderRadius: '10px', background: s.bg, color: s.col }}><s.icon size={20} /></div>
                         <div><div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', fontWeight: 600 }}>{s.label}</div><div style={{ fontSize: '1.25rem', fontWeight: 800 }}>{s.val}</div></div>
                     </div>
                 ))}
@@ -282,7 +327,7 @@ export default function ParsingPage() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', position: 'relative' }}>
                     <span style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Sort:</span>
                     <div
-                        style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.875rem', cursor: 'pointer', fontWeight: 700, color: '#483EA8' }}
+                        style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.875rem', cursor: 'pointer', fontWeight: 700, color: 'var(--primary-action)' }}
                         onClick={() => setIsSortOpen(!isSortOpen)}
                     >
                         {sortOption} <ChevronDown size={14} />
@@ -309,8 +354,8 @@ export default function ParsingPage() {
                                         padding: '0.6rem 1rem',
                                         fontSize: '0.8rem',
                                         cursor: 'pointer',
-                                        background: sortOption === opt ? 'rgba(72, 62, 168, 0.05)' : 'transparent',
-                                        color: sortOption === opt ? '#483EA8' : 'var(--text-secondary)',
+                                        background: sortOption === opt ? 'var(--bg-primary)' : 'transparent',
+                                        color: sortOption === opt ? 'var(--primary-action)' : 'var(--text-secondary)',
                                         fontWeight: sortOption === opt ? 700 : 500
                                     }}
                                 >
@@ -324,7 +369,7 @@ export default function ParsingPage() {
 
             <div style={{ background: 'var(--bg-secondary)', borderRadius: '16px', border: '1px solid var(--border-color)', overflow: 'hidden' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                    <thead><tr style={{ background: 'var(--bg-primary)', fontSize: '0.75rem', color: 'var(--text-secondary)' }}><th style={{ padding: '1rem 2rem', textAlign: 'left' }}>File Name</th><th style={{ padding: '1rem' }}>Success</th><th style={{ padding: '1rem' }}>Type</th><th style={{ padding: '1rem' }}>Activity</th><th style={{ padding: '1rem 2rem' }}>Actions</th></tr></thead>
+                    <thead><tr style={{ background: 'var(--bg-primary)', fontSize: '0.75rem', color: 'var(--text-secondary)' }}><th style={{ padding: '1rem 2rem', textAlign: 'left' }}>File Name</th><th style={{ padding: '1rem' }}>Status</th><th style={{ padding: '1rem' }}>Type</th><th style={{ padding: '1rem' }}>Activity</th><th style={{ padding: '1rem 2rem' }}>Actions</th></tr></thead>
                     <tbody>
                         {isLoading ? <tr><td colSpan="5" style={{ textAlign: 'center', padding: '2rem' }}><Loader2 className="spin-icon" size={24} color="#483EA8" /></td></tr> : sortedDocs.map(doc => (
                             <tr key={doc.document_id} style={{ borderTop: '1px solid var(--border-color)', fontSize: '0.9rem' }}>
@@ -332,17 +377,17 @@ export default function ParsingPage() {
                                 <td style={{ textAlign: 'center' }}>
                                     <span style={{
                                         display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                                        width: '24px', height: '24px', borderRadius: '50%',
-                                        background: doc.status === 'APPROVE' ? '#def7ec' : '#f3f4f6',
-                                        color: doc.status === 'APPROVE' ? '#03543f' : '#9ca3af',
-                                        fontSize: '0.75rem', fontWeight: 700
+                                        padding: '4px 12px', borderRadius: '20px',
+                                        background: doc.status === 'APPROVE' ? 'rgba(127, 175, 138, 0.1)' : 'rgba(0,0,0,0.05)',
+                                        color: doc.status === 'APPROVE' ? 'var(--accent-color)' : 'var(--text-secondary)',
+                                        fontSize: '0.7rem', fontWeight: 800
                                     }}>
-                                        {doc.status === 'APPROVE' ? '1' : '0'}
+                                        {doc.status === 'APPROVE' ? 'Approved' : 'Pending Approval'}
                                     </span>
                                 </td>
                                 <td style={{ textAlign: 'center' }}><span style={{ background: '#fef3c7', color: '#92400e', padding: '2px 8px', borderRadius: '20px', fontSize: '0.7rem', fontWeight: 800 }}>{doc.transaction_parsed_type || 'CODE'}</span></td>
                                 <td style={{ textAlign: 'center', fontSize: '0.8rem' }}>{new Date(doc.created_at).toLocaleDateString()}</td>
-                                <td style={{ textAlign: 'center', padding: '1rem 2rem' }}><div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'center' }}><button onClick={() => navigate(`/review?id=${doc.document_id}`)} style={{ background: 'none', border: '1px solid var(--border-color)', padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem', color: '#483EA8', fontWeight: 600, cursor: 'pointer' }}><TableIcon size={12} style={{ marginRight: '4px' }} /> Transactions</button><button onClick={() => handleDeleteDocument(doc.document_id, doc.file_name)} style={{ background: 'none', border: '1px solid #fecaca', padding: '4px 8px', borderRadius: '6px', color: '#e74c3c', cursor: 'pointer' }}><Trash2 size={12} /></button></div></td>
+                                <td style={{ textAlign: 'center', padding: '1rem 2rem' }}><div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'center' }}><button onClick={() => navigate(`/review?id=${doc.document_id}`)} style={{ background: 'none', border: '1px solid var(--border-color)', padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem', color: 'var(--primary-action)', fontWeight: 600, cursor: 'pointer' }}><TableIcon size={12} style={{ marginRight: '4px' }} /> Transactions</button><button onClick={() => handleDeleteDocument(doc.document_id, doc.file_name)} style={{ background: 'none', border: '1px solid #fecaca', padding: '4px 8px', borderRadius: '6px', color: '#e74c3c', cursor: 'pointer' }}><Trash2 size={12} /></button></div></td>
                             </tr>
                         ))}
                     </tbody>

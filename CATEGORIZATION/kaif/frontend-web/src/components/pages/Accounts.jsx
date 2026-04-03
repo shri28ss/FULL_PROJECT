@@ -110,7 +110,7 @@ const EditIdentifierModal = ({ account, onClose, onSuccess }) => {
             <>
               {error && <div style={{ background: 'rgba(220,38,38,0.1)', border: '1px solid rgba(220,38,38,0.3)', borderRadius: 8, padding: '10px 14px', color: '#F87171', fontSize: 13 }}>{error}</div>}
 
-              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 12px', borderRadius: 20, background: 'rgba(99,102,241,0.12)', border: '1px solid rgba(99,102,241,0.25)', fontSize: 13, color: 'var(--text-secondary)', marginBottom: 4 }}>
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 12px', borderRadius: 20, background: 'rgba(42, 79, 122, 0.12)', border: '1px solid rgba(42, 79, 122, 0.25)', fontSize: 13, color: 'var(--text-secondary)', marginBottom: 4 }}>
                 {mode === 'CREDIT_CARD' && '💳 Credit Card'}
                 {mode === 'CASH_WALLET' && '👛 Cash / Wallet'}
                 {mode === 'BANK' && '🏦 Bank Account'}
