@@ -84,6 +84,7 @@ export default function ParsingPage() {
     const [isLoading, setIsLoading] = useState(true);
     const [sortOption, setSortOption] = useState("Newest first");
     const [isSortOpen, setIsSortOpen] = useState(false);
+    const [deleteTarget, setDeleteTarget] = useState(null);
 
     const sortOptions = ["Newest first", "Oldest first", "Last activity", "Alphabetically"];
 
@@ -121,17 +122,23 @@ export default function ParsingPage() {
         return 0;
     });
 
-    const handleDeleteDocument = async (docId, fileName) => {
-        const confirmed = window.confirm(`Are you sure you want to delete "${fileName}"? This action cannot be undone.`);
-        if (!confirmed) return;
+    const handleDeleteDocument = (docId, fileName) => {
+        setDeleteTarget({ id: docId, name: fileName });
+    };
+
+    const confirmDelete = async () => {
+        if (!deleteTarget) return;
+        const { id, name } = deleteTarget;
         try {
-            await API.delete(`/documents/${docId}`);
-            setRecentDocs(prev => prev.filter(d => d.document_id !== docId));
+            await API.delete(`/documents/${id}`);
+            setRecentDocs(prev => prev.filter(d => d.document_id !== id));
             const statsRes = await API.get("/documents/stats");
             setStats(statsRes.data);
+            setDeleteTarget(null);
         } catch (err) {
             console.error("Delete failed", err);
             alert("Failed to delete document: " + (err.response?.data?.detail || err.message));
+            setDeleteTarget(null);
         }
     };
 
@@ -393,6 +400,25 @@ export default function ParsingPage() {
                     </tbody>
                 </table>
             </div>
+
+            {/* Custom Styled Delete Confirmation Modal */}
+            {deleteTarget && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(10px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 11000 }}>
+                    <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} style={{ background: 'var(--bg-secondary)', padding: '2.5rem', borderRadius: '24px', border: '1px solid var(--glass-border)', maxWidth: '420px', width: '90%', textAlign: 'center', boxShadow: '0 25px 60px -12px rgba(0,0,0,0.4)' }}>
+                        <div style={{ width: '64px', height: '64px', borderRadius: '20px', background: 'rgba(166, 61, 64, 0.1)', color: 'var(--error)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 1.5rem' }}>
+                            <Trash2 size={32} />
+                        </div>
+                        <h3 style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '0.75rem' }}>Delete Document?</h3>
+                        <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', marginBottom: '2.5rem', lineHeight: 1.6 }}>
+                            Are you sure you want to delete <br/><b style={{ color: 'var(--primary-action)' }}>"{deleteTarget.name}"</b>? <br/>This will permanently remove all associated transactions.
+                        </p>
+                        <div style={{ display: 'flex', gap: '1rem' }}>
+                            <button onClick={() => setDeleteTarget(null)} style={{ flex: 1, padding: '0.875rem', borderRadius: '12px', border: '1px solid var(--glass-border)', background: 'var(--bg-primary)', fontWeight: 700, cursor: 'pointer', color: 'var(--text-secondary)', transition: 'all 0.2s' }}>Cancel</button>
+                            <button onClick={confirmDelete} style={{ flex: 1, padding: '0.875rem', borderRadius: '12px', border: 'none', background: 'var(--error)', color: 'white', fontWeight: 700, cursor: 'pointer', boxShadow: '0 4px 12px rgba(166, 61, 64, 0.2)', transition: 'all 0.2s' }}>Delete Document</button>
+                        </div>
+                    </motion.div>
+                </div>
+            )}
         </motion.div>
     );
 }
