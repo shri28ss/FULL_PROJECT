@@ -36,7 +36,9 @@ app = FastAPI(title="LedgerAI API", version="1.0.0")
 # Standard origins including localhost and the current Vercel production URL.
 origins = [
     "http://localhost:5173",
+    "http://localhost:5174",
     "http://127.0.0.1:5173",
+    "http://127.0.0.1:5174",
     "https://ledger-ai-j5ii.vercel.app"
 ]
 
