@@ -44,7 +44,7 @@ const AppLayout = ({ user, toggleTheme, isDarkMode }) => {
       )}
 
       {/* LedgerBuddy AI Assistant */}
-      <LedgerBuddy user={user} isDarkMode={isDarkMode} />
+      {/* <LedgerBuddy user={user} isDarkMode={isDarkMode} /> */}
     </div>
   );
 };

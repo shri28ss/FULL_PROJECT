@@ -10,17 +10,15 @@ structured transaction JSON directly.
 import json
 import logging
 
-from google import genai
-from config import GEMINI_API_KEY, LLM_PARSER_MODEL
-from services.llm_retry import call_with_retry
+from services.code_gen_client import get_code_gen_client
+from config import LLM_PARSER_MODEL
 
-client = genai.Client(api_key=GEMINI_API_KEY)
 logger = logging.getLogger("ledgerai.llm_parser")
 
 
 def parse_with_llm(full_text: str, identifier_json: dict) -> str:
     """
-    Ask Gemini to directly extract transactions from the document text.
+    Ask OpenRouter to directly extract transactions from the document text.
     Returns raw LLM response string (caller must parse JSON from it).
     """
     doc_family = identifier_json.get("document_family", "BANK_ACCOUNT_STATEMENT")
@@ -89,12 +87,9 @@ Return ONLY the JSON array. No markdown. No explanation.
     logger.info("Starting LLM parse: family=%s, text_len=%d",
                 doc_family, len(full_text))
 
-    response = call_with_retry(
-        client, LLM_PARSER_MODEL, prompt,
-        config={"temperature": 0},
-    )
+    llm_client = get_code_gen_client()
+    llm_response = llm_client.generate(prompt).strip()
 
-    llm_response = response.text.strip()
     logger.info("LLM parse complete: response_len=%d", len(llm_response))
 
     return llm_response

@@ -77,25 +77,27 @@ class CodeGenClient:
         self.url = NINEROUTER_URL
         logger.info(f"9router client initialized: {self.model}")
 
-    def generate(self, prompt: str, max_retries: int = 3) -> str:
+    def generate(self, prompt: str, max_retries: int = 3, model: str = None) -> str:
         """
-        Generate code using the configured provider.
+        Generate content using the configured provider.
         Returns the generated text content.
         """
         if self.provider == "anthropic":
-            return self._generate_anthropic(prompt, max_retries)
+            return self._generate_anthropic(prompt, max_retries, model)
         else:
             # Both OpenRouter and 9router use OpenAI-compatible API
-            return self._generate_openai_compatible(prompt, max_retries)
+            return self._generate_openai_compatible(prompt, max_retries, model)
 
-    def _generate_anthropic(self, prompt: str, max_retries: int) -> str:
+    def _generate_anthropic(self, prompt: str, max_retries: int, model: str = None) -> str:
         """Generate using Anthropic direct API."""
         import time
+
+        target_model = model if model else self.model
 
         for attempt in range(max_retries + 1):
             try:
                 response = self.client.messages.create(
-                    model=self.model,
+                    model=target_model,
                     max_tokens=CODE_GEN_MAX_TOKENS,
                     temperature=CODE_GEN_TEMPERATURE,
                     messages=[{"role": "user", "content": prompt}]
@@ -122,9 +124,11 @@ class CodeGenClient:
                     logger.error(f"Anthropic API error: {e}")
                     raise
 
-    def _generate_openai_compatible(self, prompt: str, max_retries: int) -> str:
+    def _generate_openai_compatible(self, prompt: str, max_retries: int, model: str = None) -> str:
         """Generate using OpenAI-compatible API (OpenRouter or 9router)."""
         import time
+
+        target_model = model if model else self.model
 
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -137,7 +141,7 @@ class CodeGenClient:
             headers["X-Title"] = "LedgerAI"
 
         data = {
-            "model": self.model,
+            "model": target_model,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": CODE_GEN_TEMPERATURE,
             "max_tokens": CODE_GEN_MAX_TOKENS,
