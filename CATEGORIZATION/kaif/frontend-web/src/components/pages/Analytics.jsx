@@ -63,6 +63,23 @@ const Analytics = () => {
   const [plData, setPlData] = useState(null);
   const [balanceData, setBalanceData] = useState(null);
   const [ledgerData, setLedgerData] = useState([]);
+  const [selectedAccountId, setSelectedAccountId] = useState('ALL');
+  const [bankAccounts, setBankAccounts] = useState([]);
+  const [includePending, setIncludePending] = useState(false);
+
+  useEffect(() => {
+    const fetchAccounts = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      const { data } = await supabase
+        .from('accounts')
+        .select('account_id, account_name')
+        .eq('user_id', user.id)
+        .eq('account_type', 'ASSET');
+      if (data) setBankAccounts(data);
+    };
+    fetchAccounts();
+  }, []);
 
   /**
    * Fetch data based on current view and period
@@ -80,7 +97,7 @@ const Analytics = () => {
 
       if (view === 'pl') {
         // Fetch P&L data
-        const { data, error } = await supabase
+        let query = supabase
           .from('transactions')
           .select(`
             transaction_id,
@@ -88,6 +105,7 @@ const Analytics = () => {
             transaction_type,
             transaction_date,
             details,
+            base_account_id,
             offset_account:offset_account_id (
               account_id,
               account_name,
@@ -100,10 +118,16 @@ const Analytics = () => {
           .gte('transaction_date', range.from)
           .lte('transaction_date', range.to);
 
+        if (selectedAccountId !== 'ALL') {
+          query = query.eq('base_account_id', selectedAccountId);
+        }
+
+        const { data, error } = await query;
+
         console.log('P&L Query:', { user_id: user.id, range, data, error });
         if (error) throw error;
 
-        // Compute P&L from fetched data
+        // Compute P&L from official posted transactions
         let totalIncome = 0;
         let totalExpense = 0;
         const incomeBreakdown = {};
@@ -121,12 +145,48 @@ const Analytics = () => {
           }
         });
 
+        // If toggle is ON, also fetch raw uncategorized (pending) transactions
+        if (includePending) {
+          let pendingQuery = supabase
+            .from('uncategorized_transactions')
+            .select('debit, credit, details, txn_date, account_id, transactions!left(offset_account_id, accounts!transactions_offset_account_id_fkey(account_name, account_type))')
+            .eq('user_id', user.id)
+            .gte('txn_date', range.from)
+            .lte('txn_date', range.to);
+
+          if (selectedAccountId !== 'ALL') {
+            pendingQuery = pendingQuery.eq('account_id', selectedAccountId);
+          }
+
+          const { data: pendingData } = await pendingQuery;
+
+          (pendingData || []).forEach(txn => {
+            const credit = parseFloat(txn.credit) || 0;
+            const debit = parseFloat(txn.debit) || 0;
+            // Try to get category name from joined transactions table
+            const linkedTxn = txn.transactions && txn.transactions.length > 0 ? txn.transactions[0] : null;
+            const offsetAcc = linkedTxn?.accounts;
+
+            if (credit > 0) {
+              const catName = (offsetAcc?.account_type === 'INCOME') ? offsetAcc.account_name : 'Pending Income';
+              totalIncome += credit;
+              incomeBreakdown[catName] = (incomeBreakdown[catName] || 0) + credit;
+            }
+            if (debit > 0) {
+              const catName = (offsetAcc?.account_type === 'EXPENSE') ? offsetAcc.account_name : 'Pending Expense';
+              totalExpense += debit;
+              expenseBreakdown[catName] = (expenseBreakdown[catName] || 0) + debit;
+            }
+          });
+        }
+
         const netPL = totalIncome - totalExpense;
 
         setPlData({
           totalIncome,
           totalExpense,
           netPL,
+          isPending: includePending,
           incomeBreakdown: Object.entries(incomeBreakdown)
             .map(([name, amount]) => ({ name, amount }))
             .sort((a, b) => b.amount - a.amount),
@@ -238,7 +298,7 @@ const Analytics = () => {
 
   useEffect(() => {
     fetchData();
-  }, [period, view]);
+  }, [period, view, selectedAccountId, includePending]);
 
   /**
    * Render P&L View
@@ -266,22 +326,28 @@ const Analytics = () => {
       );
     }
 
-    const { totalIncome, totalExpense, netPL, incomeBreakdown, expenseBreakdown } = plData;
+    const { totalIncome, totalExpense, netPL, incomeBreakdown, expenseBreakdown, isPending } = plData;
 
     return (
       <div className="analytics-content">
+        {isPending && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', padding: '8px 14px', background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: '8px', fontSize: '13px', color: '#d97706' }}>
+            <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+            <span><strong>Projected View</strong> — includes pending/unposted transactions from raw statements. Numbers are estimates.</span>
+          </div>
+        )}
         {/* Summary Cards */}
         <div className="summary-cards">
           <div className="summary-card">
-            <div className="card-label">Total Income</div>
+            <div className="card-label">Total Income {isPending && <span style={{ fontSize: '10px', background: '#f59e0b', color: '#fff', padding: '1px 5px', borderRadius: '4px', marginLeft: '4px', verticalAlign: 'middle' }}>PROJECTED</span>}</div>
             <div className="card-value income">{formatCurrency(totalIncome)}</div>
           </div>
           <div className="summary-card">
-            <div className="card-label">Total Expenses</div>
+            <div className="card-label">Total Expenses {isPending && <span style={{ fontSize: '10px', background: '#f59e0b', color: '#fff', padding: '1px 5px', borderRadius: '4px', marginLeft: '4px', verticalAlign: 'middle' }}>PROJECTED</span>}</div>
             <div className="card-value expense">{formatCurrency(totalExpense)}</div>
           </div>
           <div className="summary-card">
-            <div className="card-label">Net P&L</div>
+            <div className="card-label">Net P&L {isPending && <span style={{ fontSize: '10px', background: '#f59e0b', color: '#fff', padding: '1px 5px', borderRadius: '4px', marginLeft: '4px', verticalAlign: 'middle' }}>PROJECTED</span>}</div>
             <div className={`card-value ${netPL >= 0 ? 'net-positive' : 'net-negative'}`}>
               {formatCurrency(netPL)}
             </div>
@@ -296,12 +362,28 @@ const Analytics = () => {
             {incomeBreakdown.length === 0 ? (
               <div className="breakdown-empty">No income recorded for this period</div>
             ) : (
-              incomeBreakdown.map((item, idx) => (
-                <div key={idx} className="breakdown-row">
-                  <span className="breakdown-account-name">{item.name}</span>
-                  <span className="breakdown-amount">{formatCurrency(item.amount)}</span>
-                </div>
-              ))
+              incomeBreakdown.map((item, idx) => {
+                const pct = totalIncome > 0 ? ((item.amount / totalIncome) * 100).toFixed(1) : 0;
+                return (
+                  <div key={idx} style={{ marginBottom: '14px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
+                      <span style={{ fontSize: '13px', color: 'var(--text-primary)', fontWeight: '500' }}>{item.name}</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>{pct}%</span>
+                        <span style={{ fontSize: '13px', fontWeight: '700', color: '#10b981' }}>{formatCurrency(item.amount)}</span>
+                      </div>
+                    </div>
+                    <div style={{ height: '6px', background: 'var(--bg-primary)', borderRadius: '999px', overflow: 'hidden' }}>
+                      <div style={{
+                        height: '100%', borderRadius: '999px',
+                        background: 'linear-gradient(90deg, #10b981, #34d399)',
+                        width: `${pct}%`,
+                        transition: 'width 0.8s cubic-bezier(0.4,0,0.2,1)'
+                      }} />
+                    </div>
+                  </div>
+                );
+              })
             )}
           </div>
 
@@ -311,12 +393,28 @@ const Analytics = () => {
             {expenseBreakdown.length === 0 ? (
               <div className="breakdown-empty">No expenses recorded for this period</div>
             ) : (
-              expenseBreakdown.map((item, idx) => (
-                <div key={idx} className="breakdown-row">
-                  <span className="breakdown-account-name">{item.name}</span>
-                  <span className="breakdown-amount">{formatCurrency(item.amount)}</span>
-                </div>
-              ))
+              expenseBreakdown.map((item, idx) => {
+                const pct = totalExpense > 0 ? ((item.amount / totalExpense) * 100).toFixed(1) : 0;
+                return (
+                  <div key={idx} style={{ marginBottom: '14px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
+                      <span style={{ fontSize: '13px', color: 'var(--text-primary)', fontWeight: '500' }}>{item.name}</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>{pct}%</span>
+                        <span style={{ fontSize: '13px', fontWeight: '700', color: '#ef4444' }}>{formatCurrency(item.amount)}</span>
+                      </div>
+                    </div>
+                    <div style={{ height: '6px', background: 'var(--bg-primary)', borderRadius: '999px', overflow: 'hidden' }}>
+                      <div style={{
+                        height: '100%', borderRadius: '999px',
+                        background: 'linear-gradient(90deg, #ef4444, #f87171)',
+                        width: `${pct}%`,
+                        transition: 'width 0.8s cubic-bezier(0.4,0,0.2,1)'
+                      }} />
+                    </div>
+                  </div>
+                );
+              })
             )}
           </div>
         </div>
@@ -352,8 +450,17 @@ const Analytics = () => {
 
     const { assets, liabilities, totalAssets, totalLiabilities, netWorth } = balanceData;
 
+    // Compute financial ratios
+    const debtRatio     = totalAssets > 0 ? ((totalLiabilities / totalAssets) * 100).toFixed(1) : 0;
+    const deRatio       = (totalAssets - totalLiabilities) > 0
+      ? (totalLiabilities / (totalAssets - totalLiabilities)).toFixed(2)
+      : '∞';
+    const netWorthPositive = netWorth >= 0;
+    const assetPct  = (totalAssets + totalLiabilities) > 0 ? (totalAssets / (totalAssets + totalLiabilities)) * 100 : 50;
+
     return (
       <div className="analytics-content">
+
         {/* Summary Cards */}
         <div className="summary-cards">
           <div className="summary-card">
@@ -365,10 +472,79 @@ const Analytics = () => {
             <div className="card-value expense">{formatCurrency(totalLiabilities)}</div>
           </div>
           <div className="summary-card">
-            <div className="card-label">Net Worth</div>
-            <div className={`card-value ${netWorth >= 0 ? 'net-positive' : 'net-negative'}`}>
+            <div className="card-label">
+              Net Worth
+              <span style={{
+                marginLeft: '8px', fontSize: '10px', fontWeight: '700',
+                padding: '2px 7px', borderRadius: '999px',
+                background: netWorthPositive ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)',
+                color: netWorthPositive ? '#059669' : '#dc2626'
+              }}>
+                {netWorthPositive ? '▲ POSITIVE' : '▼ NEGATIVE'}
+              </span>
+            </div>
+            <div className={`card-value ${netWorthPositive ? 'net-positive' : 'net-negative'}`}>
               {formatCurrency(netWorth)}
             </div>
+          </div>
+        </div>
+
+        {/* Financial Ratios Row */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: '12px', marginBottom: '20px' }}>
+          {[
+            {
+              label: 'Debt Ratio',
+              value: `${debtRatio}%`,
+              sub: 'Liabilities ÷ Assets',
+              good: Number(debtRatio) < 50,
+              tip: Number(debtRatio) < 50 ? 'Healthy' : 'High Debt'
+            },
+            {
+              label: 'Debt-to-Equity',
+              value: deRatio,
+              sub: 'Liabilities ÷ Equity',
+              good: deRatio !== '∞' && Number(deRatio) < 1,
+              tip: deRatio !== '∞' && Number(deRatio) < 1 ? 'Low Risk' : 'Leveraged'
+            },
+            {
+              label: 'Equity',
+              value: formatCurrency(totalAssets - totalLiabilities),
+              sub: 'Assets − Liabilities',
+              good: (totalAssets - totalLiabilities) >= 0,
+              tip: (totalAssets - totalLiabilities) >= 0 ? 'Solvent' : 'Insolvent'
+            }
+          ].map((r, i) => (
+            <div key={i} style={{
+              padding: '14px 16px', borderRadius: '10px',
+              border: '1px solid var(--border-color)',
+              background: 'var(--bg-card)'
+            }}>
+              <div style={{ fontSize: '11px', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '4px' }}>{r.label}</div>
+              <div style={{ fontSize: '22px', fontWeight: '800', color: r.good ? '#10b981' : '#ef4444', marginBottom: '4px' }}>{r.value}</div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>{r.sub}</span>
+                <span style={{
+                  fontSize: '10px', fontWeight: '700', padding: '1px 6px', borderRadius: '4px',
+                  background: r.good ? 'rgba(16,185,129,0.12)' : 'rgba(239,68,68,0.12)',
+                  color: r.good ? '#059669' : '#dc2626'
+                }}>{r.tip}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Assets vs Liabilities Visual Gauge */}
+        <div style={{ padding: '16px', borderRadius: '10px', border: '1px solid var(--border-color)', background: 'var(--bg-card)', marginBottom: '20px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', fontSize: '12px', fontWeight: '600' }}>
+            <span style={{ color: '#2563eb' }}>Assets — {formatCurrency(totalAssets)}</span>
+            <span style={{ color: '#ef4444' }}>Liabilities — {formatCurrency(totalLiabilities)}</span>
+          </div>
+          <div style={{ height: '10px', borderRadius: '999px', overflow: 'hidden', background: 'rgba(239,68,68,0.2)', display: 'flex' }}>
+            <div style={{
+              width: `${assetPct}%`, height: '100%',
+              background: 'linear-gradient(90deg, #2563eb, #3b82f6)',
+              borderRadius: '999px', transition: 'width 1s cubic-bezier(0.4,0,0.2,1)'
+            }} />
           </div>
         </div>
 
@@ -379,12 +555,27 @@ const Analytics = () => {
             {assets.length === 0 ? (
               <div className="breakdown-empty">No asset activity for this period</div>
             ) : (
-              assets.map((item, idx) => (
-                <div key={idx} className="breakdown-row">
-                  <span className="breakdown-account-name">{item.account_name}</span>
-                  <span className="breakdown-amount">{formatCurrency(item.balance)}</span>
-                </div>
-              ))
+              assets.map((item, idx) => {
+                const pct = totalAssets > 0 ? ((item.balance / totalAssets) * 100).toFixed(1) : 0;
+                return (
+                  <div key={idx} style={{ marginBottom: '14px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
+                      <span style={{ fontSize: '13px', color: 'var(--text-primary)', fontWeight: '500' }}>{item.account_name}</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>{pct}%</span>
+                        <span style={{ fontSize: '13px', fontWeight: '700', color: '#2563eb' }}>{formatCurrency(item.balance)}</span>
+                      </div>
+                    </div>
+                    <div style={{ height: '6px', background: 'var(--bg-primary)', borderRadius: '999px', overflow: 'hidden' }}>
+                      <div style={{
+                        height: '100%', borderRadius: '999px',
+                        background: 'linear-gradient(90deg, #2563eb, #60a5fa)',
+                        width: `${pct}%`, transition: 'width 0.8s cubic-bezier(0.4,0,0.2,1)'
+                      }} />
+                    </div>
+                  </div>
+                );
+              })
             )}
           </div>
           <div className="breakdown-card">
@@ -392,12 +583,27 @@ const Analytics = () => {
             {liabilities.length === 0 ? (
               <div className="breakdown-empty">No liabilities for this period</div>
             ) : (
-              liabilities.map((item, idx) => (
-                <div key={idx} className="breakdown-row">
-                  <span className="breakdown-account-name">{item.account_name}</span>
-                  <span className="breakdown-amount">{formatCurrency(item.balance)}</span>
-                </div>
-              ))
+              liabilities.map((item, idx) => {
+                const pct = totalLiabilities > 0 ? ((item.balance / totalLiabilities) * 100).toFixed(1) : 0;
+                return (
+                  <div key={idx} style={{ marginBottom: '14px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
+                      <span style={{ fontSize: '13px', color: 'var(--text-primary)', fontWeight: '500' }}>{item.account_name}</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>{pct}%</span>
+                        <span style={{ fontSize: '13px', fontWeight: '700', color: '#ef4444' }}>{formatCurrency(item.balance)}</span>
+                      </div>
+                    </div>
+                    <div style={{ height: '6px', background: 'var(--bg-primary)', borderRadius: '999px', overflow: 'hidden' }}>
+                      <div style={{
+                        height: '100%', borderRadius: '999px',
+                        background: 'linear-gradient(90deg, #ef4444, #f87171)',
+                        width: `${pct}%`, transition: 'width 0.8s cubic-bezier(0.4,0,0.2,1)'
+                      }} />
+                    </div>
+                  </div>
+                );
+              })
             )}
           </div>
         </div>
@@ -406,7 +612,7 @@ const Analytics = () => {
   };
 
   /**
-   * Render Ledger View
+   * Render Ledger View — Color-coded, grouped double-entry ledger
    */
   const renderLedgerView = () => {
     if (loading) {
@@ -420,55 +626,146 @@ const Analytics = () => {
       );
     }
 
-    return (
-      <>
-        <div className="placeholder-table">
-          <div className="table-header">
-            <div>Date</div>
-            <div>Description</div>
-            <div>Account</div>
-            <div>Debit</div>
-            <div>Credit</div>
+    if (ledgerData.length === 0) {
+      return (
+        <div className="placeholder-rows" style={{ justifyContent: 'center' }}>
+          <div className="empty-state">
+            <div className="empty-icon">📖</div>
+            <p>No ledger entries for this period</p>
           </div>
-          <div className="placeholder-rows">
-            {ledgerData.length === 0 ? (
-              <div className="empty-state">
-                <div className="empty-icon">📖</div>
-                <p>No ledger entries for this period</p>
-              </div>
-            ) : (
-              ledgerData.map((entry, idx) => {
-                // Determine if this is the second entry of a pair
-                const isSecondOfPair = idx > 0 && ledgerData[idx - 1].transaction?.transaction_id === entry.transaction?.transaction_id;
-                const isEndOfPair = idx === ledgerData.length - 1 || ledgerData[idx + 1].transaction?.transaction_id !== entry.transaction?.transaction_id;
+        </div>
+      );
+    }
+
+    // Group entries by transaction_id into transaction pairs
+    const groups = [];
+    let i = 0;
+    while (i < ledgerData.length) {
+      const current = ledgerData[i];
+      const next = ledgerData[i + 1];
+      const sameTransaction = next && next.transaction?.transaction_id === current.transaction?.transaction_id;
+      if (sameTransaction) {
+        groups.push([current, next]);
+        i += 2;
+      } else {
+        groups.push([current]);
+        i += 1;
+      }
+    }
+
+    const acctTypeColor = (type) => {
+      if (type === 'INCOME')    return { bg: 'rgba(16,185,129,0.12)', color: '#059669' };
+      if (type === 'EXPENSE')   return { bg: 'rgba(239,68,68,0.12)',  color: '#dc2626' };
+      if (type === 'ASSET')     return { bg: 'rgba(59,130,246,0.12)', color: '#2563eb' };
+      if (type === 'LIABILITY') return { bg: 'rgba(245,158,11,0.12)', color: '#d97706' };
+      return { bg: 'rgba(156,163,175,0.12)', color: '#6b7280' };
+    };
+
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+        {/* Header */}
+        <div style={{
+          display: 'grid', gridTemplateColumns: '110px 1fr 160px 120px 120px',
+          padding: '8px 16px', borderRadius: '8px',
+          background: 'var(--bg-secondary)',
+          fontSize: '11px', fontWeight: '700', letterSpacing: '0.08em',
+          color: 'var(--text-secondary)', textTransform: 'uppercase'
+        }}>
+          <div>Date</div>
+          <div>Description</div>
+          <div>Account</div>
+          <div style={{ textAlign: 'right' }}>Debit</div>
+          <div style={{ textAlign: 'right' }}>Credit</div>
+        </div>
+
+        {groups.map((group, gIdx) => {
+          const firstEntry = group[0];
+          const txnDate = formatDate(firstEntry.entry_date);
+          const txnDesc = firstEntry.transaction?.details || '—';
+          const isEven = gIdx % 2 === 0;
+
+          return (
+            <div key={gIdx} style={{
+              borderRadius: '10px',
+              border: '1px solid var(--border-color)',
+              background: isEven ? 'var(--bg-card)' : 'var(--bg-secondary)',
+              overflow: 'hidden',
+              borderLeft: `3px solid ${firstEntry.debit_amount > 0 ? '#ef4444' : '#10b981'}`
+            }}>
+              {group.map((entry, eIdx) => {
+                const isDebit  = entry.debit_amount  > 0;
+                const isCredit = entry.credit_amount > 0;
+                const accType  = entry.account?.account_type;
+                const badge    = acctTypeColor(accType);
 
                 return (
-                  <div
-                    key={entry.ledger_entry_id}
-                    className={`table-row ${isEndOfPair ? 'pair-separator' : ''}`}
-                  >
-                    <div className={`date-cell ${isSecondOfPair ? 'hidden' : ''}`}>
-                      {formatDate(entry.entry_date)}
+                  <div key={entry.ledger_entry_id} style={{
+                    display: 'grid',
+                    gridTemplateColumns: '110px 1fr 160px 120px 120px',
+                    padding: '11px 16px',
+                    alignItems: 'center',
+                    borderTop: eIdx > 0 ? '1px dashed var(--border-color)' : 'none',
+                    fontSize: '13px',
+                  }}>
+                    {/* Date — only first row shows it */}
+                    <div style={{ color: 'var(--text-secondary)', fontSize: '12px' }}>
+                      {eIdx === 0 ? txnDate : ''}
                     </div>
-                    <div className={`description-cell ${isSecondOfPair ? 'hidden' : ''}`}>
-                      {entry.transaction?.details || '—'}
+
+                    {/* Description — only first row shows it */}
+                    <div style={{
+                      fontWeight: eIdx === 0 ? '500' : '400',
+                      color: eIdx === 0 ? 'var(--text-primary)' : 'var(--text-secondary)',
+                      fontSize: '13px', paddingRight: '8px',
+                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'
+                    }}>
+                      {eIdx === 0 ? txnDesc : (
+                        <span style={{ fontSize: '11px', fontStyle: 'italic', color: 'var(--text-secondary)' }}>
+                          offset entry
+                        </span>
+                      )}
                     </div>
-                    <div className="account-cell">
-                      {entry.account?.account_name || '—'}
+
+                    {/* Account name + type badge */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span style={{ fontSize: '12px', color: 'var(--text-primary)' }}>
+                        {entry.account?.account_name || '—'}
+                      </span>
+                      {accType && (
+                        <span style={{
+                          fontSize: '9px', fontWeight: '700', letterSpacing: '0.05em',
+                          padding: '1px 5px', borderRadius: '4px',
+                          background: badge.bg, color: badge.color
+                        }}>
+                          {accType}
+                        </span>
+                      )}
                     </div>
-                    <div className="debit-cell">
-                      {entry.debit_amount > 0 ? formatCurrency(entry.debit_amount) : '—'}
+
+                    {/* Debit */}
+                    <div style={{
+                      textAlign: 'right', fontWeight: '600',
+                      color: isDebit ? '#ef4444' : 'var(--text-secondary)',
+                      fontSize: isDebit ? '13px' : '12px'
+                    }}>
+                      {isDebit ? formatCurrency(entry.debit_amount) : '—'}
                     </div>
-                    <div className="credit-cell">
-                      {entry.credit_amount > 0 ? formatCurrency(entry.credit_amount) : '—'}
+
+                    {/* Credit */}
+                    <div style={{
+                      textAlign: 'right', fontWeight: '600',
+                      color: isCredit ? '#10b981' : 'var(--text-secondary)',
+                      fontSize: isCredit ? '13px' : '12px'
+                    }}>
+                      {isCredit ? formatCurrency(entry.credit_amount) : '—'}
                     </div>
                   </div>
                 );
-              })
-            )}
-          </div>
-        </div>
-      </>
+              })}
+            </div>
+          );
+        })}
+      </div>
     );
   };
 
@@ -496,32 +793,80 @@ const Analytics = () => {
         </div>
       </div>
 
-      {/* Period Filter Tabs */}
-      <div className="filter-tabs">
-        <button
-          className={`filter-tab ${period === 'month' ? 'active' : ''}`}
-          onClick={() => setPeriod('month')}
-        >
-          This Month
-        </button>
-        <button
-          className={`filter-tab ${period === 'quarter' ? 'active' : ''}`}
-          onClick={() => setPeriod('quarter')}
-        >
-          This Quarter
-        </button>
-        <button
-          className={`filter-tab ${period === 'year' ? 'active' : ''}`}
-          onClick={() => setPeriod('year')}
-        >
-          This Year
-        </button>
-        <button
-          className={`filter-tab ${period === 'all' ? 'active' : ''}`}
-          onClick={() => setPeriod('all')}
-        >
-          All Time
-        </button>
+      {/* Period Filter Tabs & Bank Filter */}
+      <div className="filter-tabs" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', marginBottom: '24px' }}>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <button
+            className={`filter-tab ${period === 'month' ? 'active' : ''}`}
+            onClick={() => setPeriod('month')}
+          >
+            This Month
+          </button>
+          <button
+            className={`filter-tab ${period === 'quarter' ? 'active' : ''}`}
+            onClick={() => setPeriod('quarter')}
+          >
+            This Quarter
+          </button>
+          <button
+            className={`filter-tab ${period === 'year' ? 'active' : ''}`}
+            onClick={() => setPeriod('year')}
+          >
+            This Year
+          </button>
+          <button
+            className={`filter-tab ${period === 'all' ? 'active' : ''}`}
+            onClick={() => setPeriod('all')}
+          >
+            All Time
+          </button>
+        </div>
+        
+        {view === 'pl' && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            {bankAccounts.length > 0 && (
+              <select
+                value={selectedAccountId}
+                onChange={e => setSelectedAccountId(e.target.value)}
+                style={{
+                  padding: '6px 12px',
+                  borderRadius: '8px',
+                  border: '1px solid var(--border-color)',
+                  background: 'var(--bg-secondary)',
+                  color: 'var(--text-primary)',
+                  fontSize: '14px',
+                  outline: 'none',
+                  cursor: 'pointer',
+                  minWidth: '150px'
+                }}
+              >
+                <option value="ALL">All Accounts</option>
+                {bankAccounts.map(acc => (
+                  <option key={acc.account_id} value={acc.account_id}>{acc.account_name}</option>
+                ))}
+              </select>
+            )}
+            <label style={{ display: 'flex', alignItems: 'center', gap: '7px', cursor: 'pointer', userSelect: 'none', fontSize: '13px', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
+              <div
+                onClick={() => setIncludePending(p => !p)}
+                style={{
+                  width: '36px', height: '20px', borderRadius: '10px', position: 'relative', cursor: 'pointer',
+                  background: includePending ? '#f59e0b' : 'var(--border-color)',
+                  transition: 'background 0.2s ease', flexShrink: 0
+                }}
+              >
+                <div style={{
+                  position: 'absolute', top: '2px',
+                  left: includePending ? '18px' : '2px',
+                  width: '16px', height: '16px', borderRadius: '50%',
+                  background: '#fff', transition: 'left 0.2s ease',
+                  boxShadow: '0 1px 3px rgba(0,0,0,0.3)'
+                }} />
+              </div>
+              Include Pending
+            </label>
+          </div>
+        )}
       </div>
 
       {/* Content */}

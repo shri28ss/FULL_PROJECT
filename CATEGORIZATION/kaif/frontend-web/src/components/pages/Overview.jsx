@@ -47,14 +47,15 @@ const Overview = () => {
           txn_date,
           details,
           debit,
-          debit,
           credit,
           document_id,
           account_id,
           source_document:document_id ( file_name ),
           source_account:account_id ( account_name ),
           transactions (
-             accounts:offset_account_id ( account_name )
+             is_contra,
+             is_uncategorised,
+             accounts:offset_account_id ( account_name, account_type )
           )
         `)
         .eq('user_id', user.id)
@@ -93,9 +94,6 @@ const Overview = () => {
       const credit = parseFloat(txn.credit) || 0;
       const debit = parseFloat(txn.debit) || 0;
 
-      totalIncome += credit;
-      totalExpense += debit;
-
       const date = new Date(txn.txn_date);
       let timeKey = '';
       let sortTime = date.getTime();
@@ -121,24 +119,67 @@ const Overview = () => {
       monthlyData[timeKey].expense += debit;
 
       let category = 'Uncategorized';
-      if (txn.transactions && txn.transactions.length > 0 && txn.transactions[0].accounts) {
-        category = txn.transactions[0].accounts.account_name;
-      } else {
-        if (txn.details.toLowerCase().includes('salary')) category = 'Staff Salary';
-        else if (txn.details.toLowerCase().includes('rent')) category = 'Rent';
-        else if (txn.details.toLowerCase().includes('medical')) category = 'Medical Supplies';
-        else if (txn.details.toLowerCase().includes('equipment')) category = 'Equipment Maintenance';
+      let offsetAccountType = null;
+      let isContra = false;
+      let isUncatDB = false;
+
+      if (txn.transactions && txn.transactions.length > 0) {
+        const linkedTxn = txn.transactions[0];
+        isContra = linkedTxn.is_contra === true;
+        isUncatDB = linkedTxn.is_uncategorised === true;
+        if (linkedTxn.accounts) {
+          category = linkedTxn.accounts.account_name;
+          offsetAccountType = linkedTxn.accounts.account_type;
+        }
       }
 
-      if (debit > 0) {
-        if (!expenseMap[category]) expenseMap[category] = { amount: 0, txns: [] };
-        expenseMap[category].amount += debit;
-        expenseMap[category].txns.push(txn);
+      // Skip contra transactions (internal bank-to-bank transfers)
+      if (isContra) {
+        monthlyData[timeKey].income -= credit;
+        monthlyData[timeKey].expense -= debit;
+        return;
       }
-      if (credit > 0) {
-        if (!incomeMap[category]) incomeMap[category] = { amount: 0, txns: [] };
-        incomeMap[category].amount += credit;
-        incomeMap[category].txns.push(txn);
+
+      // Skip uncategorised transactions:
+      // 1. the database explicitly marked it as uncategorised (is_uncategorised === true)
+      // 2. no linked account at all (offsetAccountType is null)
+      // 3. name fallback safety net
+      const isUncategorised = isUncatDB || offsetAccountType === null || category.toLowerCase().includes('uncategor');
+      if (isUncategorised) {
+        monthlyData[timeKey].income -= credit;
+        monthlyData[timeKey].expense -= debit;
+        return;
+      }
+
+      // Strict COA-based classification — use account_type exactly as defined in Chart of Accounts:
+      //   EXPENSE  → counts as an expense (Rent, Food, Travel, etc.)
+      //   INCOME   → counts as income (Salary received, Revenue, etc.)
+      //   ASSET / LIABILITY / EQUITY / anything else → skip from P&L (balance sheet movements)
+
+      if (offsetAccountType === 'EXPENSE') {
+        if (debit > 0) {
+          totalExpense += debit;
+          if (!expenseMap[category]) expenseMap[category] = { amount: 0, txns: [] };
+          expenseMap[category].amount += debit;
+          expenseMap[category].txns.push(txn);
+        } else {
+          // Credit on an EXPENSE account = expense reversal — subtract from chart too
+          monthlyData[timeKey].expense -= credit;
+        }
+      } else if (offsetAccountType === 'INCOME') {
+        if (credit > 0) {
+          totalIncome += credit;
+          if (!incomeMap[category]) incomeMap[category] = { amount: 0, txns: [] };
+          incomeMap[category].amount += credit;
+          incomeMap[category].txns.push(txn);
+        } else {
+          // Debit on an INCOME account = income reversal — subtract from chart too
+          monthlyData[timeKey].income -= debit;
+        }
+      } else {
+        // ASSET, LIABILITY, EQUITY — balance sheet movement, exclude from P&L chart
+        monthlyData[timeKey].income -= credit;
+        monthlyData[timeKey].expense -= debit;
       }
     });
 
@@ -160,10 +201,11 @@ const Overview = () => {
       insights.push({ type: 'info', text: `Your highest spend category is '${topExpenseCat[0]}', burning ${ratio}% of all expenses.` });
     }
 
-    const expTxns = txns.filter(t => t.debit > 0).sort((a, b) => b.debit - a.debit);
-    if (expTxns.length > 0) {
-      const largest = expTxns[0];
-      const avg = totalExpense / expTxns.length;
+    // Extract all valid, categorised expense transactions from the expenseMap
+    const validExpenseTxns = Object.values(expenseMap).flatMap(cat => cat.txns).sort((a, b) => b.debit - a.debit);
+    if (validExpenseTxns.length > 0) {
+      const largest = validExpenseTxns[0];
+      const avg = totalExpense / validExpenseTxns.length;
       if (largest.debit > avg * 3 && largest.debit > 10000) {
         const formattedAmt = new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR' }).format(largest.debit);
         insights.push({ type: 'warning', text: `Large unusual transaction detected: ${formattedAmt} for '${largest.details}'.` });
