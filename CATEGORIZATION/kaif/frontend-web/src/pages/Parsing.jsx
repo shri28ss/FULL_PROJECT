@@ -85,6 +85,7 @@ export default function ParsingPage() {
     const [sortOption, setSortOption] = useState("Newest first");
     const [isSortOpen, setIsSortOpen] = useState(false);
     const [deleteTarget, setDeleteTarget] = useState(null);
+    const [isDeleting, setIsDeleting] = useState(false);
 
     const sortOptions = ["Newest first", "Oldest first", "Last activity", "Alphabetically"];
 
@@ -127,18 +128,36 @@ export default function ParsingPage() {
     };
 
     const confirmDelete = async () => {
-        if (!deleteTarget) return;
+        if (!deleteTarget || isDeleting) return;
         const { id, name } = deleteTarget;
+        setIsDeleting(true);
+        setError(""); // Clear any previous dashboard errors
+
         try {
+            // 1. Perform deletion
             await API.delete(`/documents/${id}`);
+            
+            // 2. Optimistically update local list for immediate UI feedback
             setRecentDocs(prev => prev.filter(d => d.document_id !== id));
+            
+            // 3. Refresh stats and data in background
             const statsRes = await API.get("/documents/stats");
             setStats(statsRes.data);
+            
+            // 4. Close modal
             setDeleteTarget(null);
         } catch (err) {
             console.error("Delete failed", err);
-            alert("Failed to delete document: " + (err.response?.data?.detail || err.message));
-            setDeleteTarget(null);
+            // If the document is already gone (404), we just consider it a success for the user
+            if (err.response?.status === 404) {
+                setRecentDocs(prev => prev.filter(d => d.document_id !== id));
+                setDeleteTarget(null);
+            } else {
+                alert("Failed to delete document: " + (err.response?.data?.detail || err.message));
+                setDeleteTarget(null);
+            }
+        } finally {
+            setIsDeleting(false);
         }
     };
 
@@ -465,8 +484,42 @@ export default function ParsingPage() {
                             This action will permanently remove all associated transactions.
                         </p>
                         <div style={{ display: 'flex', gap: '1rem' }}>
-                            <button onClick={() => setDeleteTarget(null)} style={{ flex: 1, padding: '0.875rem', borderRadius: '12px', border: '1px solid var(--glass-border)', background: 'var(--bg-primary)', fontWeight: 700, cursor: 'pointer', color: 'var(--text-secondary)', transition: 'all 0.2s' }}>Cancel</button>
-                            <button onClick={confirmDelete} style={{ flex: 1, padding: '0.875rem', borderRadius: '12px', border: 'none', background: 'var(--error)', color: 'white', fontWeight: 700, cursor: 'pointer', boxShadow: '0 4px 12px rgba(166, 61, 64, 0.2)', transition: 'all 0.2s' }}>Delete Document</button>
+                            <button 
+                                onClick={() => setDeleteTarget(null)} 
+                                disabled={isDeleting}
+                                style={{ flex: 1, padding: '0.875rem', borderRadius: '12px', border: '1px solid var(--glass-border)', background: 'var(--bg-primary)', fontWeight: 700, cursor: isDeleting ? 'not-allowed' : 'pointer', color: 'var(--text-secondary)', transition: 'all 0.2s', opacity: isDeleting ? 0.5 : 1 }}
+                            >
+                                Cancel
+                            </button>
+                            <button 
+                                onClick={confirmDelete} 
+                                disabled={isDeleting}
+                                style={{ 
+                                    flex: 1, 
+                                    padding: '0.875rem', 
+                                    borderRadius: '12px', 
+                                    border: 'none', 
+                                    background: isDeleting ? '#fecaca' : 'var(--error)', 
+                                    color: 'white', 
+                                    fontWeight: 700, 
+                                    cursor: isDeleting ? 'not-allowed' : 'pointer', 
+                                    boxShadow: isDeleting ? 'none' : '0 4px 12px rgba(166, 61, 64, 0.2)', 
+                                    transition: 'all 0.2s',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    gap: '8px'
+                                }}
+                            >
+                                {isDeleting ? (
+                                    <>
+                                        <Loader2 size={18} className="spin-icon" />
+                                        DELETING...
+                                    </>
+                                ) : (
+                                    "Delete Document"
+                                )}
+                            </button>
                         </div>
                     </motion.div>
                 </div>

@@ -451,8 +451,17 @@ async def get_document_review(document_id: int, user=Depends(get_current_user)):
     }
 
 
+class ApprovalRequest(BaseModel):
+    transactions: Optional[list] = None
+    parser_type: Optional[str] = None
+
+
 @router.post("/{document_id}/approve")
-async def approve_document(document_id: int, user=Depends(get_current_user)):
+async def approve_document(
+    document_id: int, 
+    body: Optional[ApprovalRequest] = None, 
+    user=Depends(get_current_user)
+):
     user_id = user["user_id"]
     sb = get_client()
 
@@ -471,41 +480,65 @@ async def approve_document(document_id: int, user=Depends(get_current_user)):
     if doc["status"] == "APPROVE":
         return {"message": "Already approved", "inserted": 0}
 
-    # Fetch staging rows
-    staging_result = (
-        sb.table("ai_transactions_staging")
-        .select("staging_transaction_id, transaction_json, parser_type")
-        .eq("document_id", document_id)
-        .execute()
-    )
-    staging_rows = staging_result.data or []
-    if not staging_rows:
-        raise HTTPException(status_code=400, detail="No staging transactions to approve")
+    transactions_to_approve = []
+    parser_used = doc.get("transaction_parsed_type") or "LLM"
+    staging_id = None
 
-    preferred_parser = doc.get("transaction_parsed_type") or "LLM"
-    chosen_row = next(
-        (r for r in staging_rows if r["parser_type"] == preferred_parser),
-        staging_rows[0],
-    )
-    logger.info("Approve doc=%s: preferred_parser=%s  chosen=%s",
-                document_id, preferred_parser, chosen_row["parser_type"])
-    staging_id = chosen_row["staging_transaction_id"]
-    txn_data = chosen_row["transaction_json"]
-    if isinstance(txn_data, str):
-        txn_data = json.loads(txn_data)
-    # Normalize: transaction_json can be a single dict or a list of dicts.
-    # Iterating over a dict gives string keys, not transaction objects.
-    if isinstance(txn_data, dict):
-        txn_data = [txn_data]
-    elif not isinstance(txn_data, list):
-        txn_data = []
+    # Case 1: Selective transactions provided by frontend
+    if body and body.transactions is not None:
+        transactions_to_approve = body.transactions
+        parser_used = body.parser_type or parser_used
+        logger.info("Approve doc=%s: User provided %d selective/edited transactions (parser=%s)", 
+                    document_id, len(transactions_to_approve), parser_used)
+        
+        # We still want to link these back to a staging_id if possible for record-keeping
+        staging_result = (
+            sb.table("ai_transactions_staging")
+            .select("staging_transaction_id")
+            .eq("document_id", document_id)
+            .eq("parser_type", parser_used)
+            .maybe_single()
+            .execute()
+        )
+        if staging_result.data:
+            staging_id = staging_result.data["staging_transaction_id"]
 
-    clean_txns = [t for t in txn_data if _is_valid_transaction(t)]
-    skipped = len(txn_data) - len(clean_txns)
-    if skipped:
-        logger.warning("Approve doc=%s — skipped %d junk row(s): %s",
-                       document_id, skipped,
-                       [t.get("date") for t in txn_data if not _is_valid_transaction(t)])
+    # Case 2: Standard "Approve All" logic
+    else:
+        staging_result = (
+            sb.table("ai_transactions_staging")
+            .select("staging_transaction_id, transaction_json, parser_type")
+            .eq("document_id", document_id)
+            .execute()
+        )
+        staging_rows = staging_result.data or []
+        if not staging_rows:
+            raise HTTPException(status_code=400, detail="No staging transactions to approve")
+
+        chosen_row = next(
+            (r for r in staging_rows if r["parser_type"] == parser_used),
+            staging_rows[0],
+        )
+        parser_used = chosen_row["parser_type"]
+        staging_id = chosen_row["staging_transaction_id"]
+        
+        txn_data = chosen_row["transaction_json"]
+        if isinstance(txn_data, str):
+            txn_data = json.loads(txn_data)
+        
+        if isinstance(txn_data, dict):
+            transactions_to_approve = [txn_data]
+        elif isinstance(txn_data, list):
+            transactions_to_approve = txn_data
+
+    # Common validation and insertion logic
+    clean_txns = [t for t in transactions_to_approve if _is_valid_transaction(t)]
+    skipped = len(transactions_to_approve) - len(clean_txns)
+    
+    if skipped and not (body and body.transactions):
+        # Only log junk skipped for automatic path; for manual path, user might have just selected few
+        logger.warning("Approve doc=%s — skipped %d junk row(s)", document_id, skipped)
+    
     account_id = doc.get("account_id")
 
     rows = [
@@ -514,7 +547,6 @@ async def approve_document(document_id: int, user=Depends(get_current_user)):
             "account_id": account_id,
             "document_id": document_id,
             "staging_transaction_id": staging_id,
-            # Support both "date" (current) and "txn_date" (old staging rows)
             "txn_date": txn.get("date") or txn.get("txn_date"),
             "debit": txn.get("debit"),
             "credit": txn.get("credit"),
@@ -523,39 +555,24 @@ async def approve_document(document_id: int, user=Depends(get_current_user)):
         }
         for txn in clean_txns
     ]
+
     if not rows:
-        # All transactions were filtered — don't mark APPROVE, tell user clearly
-        logger.warning(
-            "Approve doc=%s — 0 valid transactions after filtering. "
-            "txn_data length=%d. Not marking APPROVE.",
-            document_id, len(txn_data),
-        )
         raise HTTPException(
             status_code=400,
-            detail=(
-                f"No valid transactions found to approve. "
-                f"All {len(txn_data)} transaction(s) were filtered out as invalid. "
-                f"Check Render logs for details."
-            ),
+            detail="No valid transactions selected for approval."
         )
 
     try:
         sb.table("uncategorized_transactions").insert(rows).execute()
+        sb.table("documents").update({"status": "APPROVE"}).eq("document_id", document_id).execute()
     except Exception as insert_err:
-        logger.error(
-            "Approve doc=%s — uncategorized_transactions INSERT FAILED: %s",
-            document_id, insert_err, exc_info=True,
-        )
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to save transactions: {insert_err}",
-        )
-
-    sb.table("documents").update({"status": "APPROVE"}).eq("document_id", document_id).execute()
+        logger.error("Approve doc=%s — INSERT FAILED: %s", document_id, insert_err)
+        raise HTTPException(status_code=500, detail=f"Failed to save transactions: {insert_err}")
 
     inserted = len(rows)
-    logger.info("✅ Document %s approved by user %s — %d txns saved (parser=%s, junk_skipped=%d)",
-                document_id, user_id, inserted, chosen_row["parser_type"], skipped)
+    logger.info("✅ Document %s approved — %d txns saved (parser=%s)",
+                document_id, inserted, parser_used)
+    
     return {"message": "Document approved", "inserted": inserted}
 
 
@@ -646,35 +663,48 @@ async def delete_document(document_id: int, user=Depends(get_current_user)):
     user_id = user["user_id"]
     sb = get_client()
 
-    doc_result = (
-        sb.table("documents")
-        .select("document_id, file_path, status")
-        .eq("document_id", document_id)
-        .eq("user_id", user_id)
-        .maybe_single()
-        .execute()
-    )
-    if not doc_result.data:
-        raise HTTPException(status_code=404, detail="Document not found")
-
-    file_path = doc_result.data.get("file_path")
-    if file_path:
-        if not file_path.startswith("/"):
-            try:
-                sb.storage.from_(SUPABASE_STORAGE_BUCKET).remove([file_path])
-                logger.info("Deleted from Supabase Storage: %s", file_path)
-            except Exception as e:
-                logger.warning("Could not delete storage file %s: %s", file_path, e)
-        elif os.path.exists(file_path):
-            try:
-                os.remove(file_path)
-                logger.info("Deleted local file: %s", file_path)
-            except Exception as e:
-                logger.warning("Could not delete local file %s: %s", file_path, e)
-
-    # Delete child records safely
     try:
-        # Use simple delete without assuming response data content
+        # 1. Fetch document metadata to handle storage cleanup
+        doc_result = (
+            sb.table("documents")
+            .select("document_id, file_path, status")
+            .eq("document_id", document_id)
+            .eq("user_id", user_id)
+            .maybe_single()
+            .execute()
+        )
+        
+        if not doc_result or not hasattr(doc_result, 'data') or doc_result.data is None:
+            logger.warning("Delete failed: Document %s not found for user %s", document_id, user_id)
+            throw_err = True
+        else:
+            throw_err = False
+
+        if throw_err:
+            raise HTTPException(status_code=404, detail="Document not found or already deleted")
+
+        doc = doc_result.data
+        file_path = doc.get("file_path")
+
+        # 2. Cleanup Supabase Storage / Local files
+        if file_path:
+            if not str(file_path).startswith("/"):
+                try:
+                    # Supabase Storage path: "user_id/hash.pdf"
+                    sb.storage.from_(SUPABASE_STORAGE_BUCKET).remove([file_path])
+                    logger.info("Deleted from Supabase Storage: %s", file_path)
+                except Exception as e:
+                    logger.warning("Could not delete storage file %s: %s", file_path, e)
+            elif os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                    logger.info("Deleted local file: %s", file_path)
+                except Exception as e:
+                    logger.warning("Could not delete local file %s: %s", file_path, e)
+
+        # 3. Delete child records and document record
+        # Note: We don't check .data for these deletes to avoid NoneType errors 
+        # if the library returns None or empty response objects for DELETE operations.
         sb.table("ai_transactions_staging").delete().eq("document_id", document_id).execute()
         sb.table("uncategorized_transactions").delete().eq("document_id", document_id).execute()
         sb.table("document_password").delete().eq("document_id", document_id).execute()
@@ -682,11 +712,18 @@ async def delete_document(document_id: int, user=Depends(get_current_user)):
         # Finally delete the document record
         sb.table("documents").delete().eq("document_id", document_id).eq("user_id", user_id).execute()
         
-        logger.info("Document %s deleted by user %s", document_id, user_id)
+        logger.info("✅ Document %s successfully deleted by user %s", document_id, user_id)
         return {"message": "Document deleted successfully"}
+
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error("Database deletion failed for doc %s: %s", document_id, e)
-        raise HTTPException(status_code=500, detail=f"Database deletion failed: {str(e)}")
+        logger.error("❌ Database deletion failed for doc %s: %s", document_id, e, exc_info=True)
+        # Check for the specific NoneType error and return a cleaner message
+        err_msg = str(e)
+        if "'NoneType' object has no attribute 'data'" in err_msg:
+            err_msg = "Database response was empty. The document might already be deleted."
+        raise HTTPException(status_code=500, detail=f"Database deletion failed: {err_msg}")
 
 
 @router.get("/{document_id}/download-json")
