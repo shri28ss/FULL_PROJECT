@@ -318,12 +318,12 @@ export default function ReviewPage() {
                                         disabled={isApproved}
                                     />
                                 </th>
-                                <th style={{ padding: '1rem', textAlign: 'left', fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Date</th>
+                                <th style={{ padding: '1rem', textAlign: 'left', fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', width: '130px' }}>Date</th>
                                 <th style={{ padding: '1rem', textAlign: 'left', fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Details</th>
                                 <th style={{ padding: '1rem', textAlign: 'right', fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Debit</th>
                                 <th style={{ padding: '1rem', textAlign: 'right', fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Credit</th>
                                 <th style={{ padding: '1rem', textAlign: 'right', fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Balance</th>
-                                <th style={{ padding: '1rem', textAlign: 'center', fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Conf.</th>
+                                <th style={{ padding: '1rem', textAlign: 'center', fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', width: '100px' }}>Confidence</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -348,7 +348,7 @@ export default function ReviewPage() {
                                                 value={tx.date || tx.txn_date || ''} 
                                                 onChange={(e) => handleUpdateTxn(parserType, i, 'date', e.target.value)}
                                                 disabled={isApproved}
-                                                style={{ width: '80px' }}
+                                                style={{ width: '120px' }}
                                             />
                                         </td>
                                         <td style={{ padding: '0.5rem' }}>
