@@ -50,9 +50,10 @@ const AccountPickerModal = ({
           .eq('is_active', true);
 
         // Filter by balance nature if transaction direction is specified
-        if (allowedBalanceNature) {
-          query = query.eq('balance_nature', allowedBalanceNature);
-        }
+        // TODO: temporarily disabled — re-enable when balance_nature data is reliable
+        // if (allowedBalanceNature) {
+        //   query = query.eq('balance_nature', allowedBalanceNature);
+        // }
 
         const { data, error } = await query
           .order('account_type', { ascending: true })
@@ -78,7 +79,7 @@ const AccountPickerModal = ({
         searchInputRef.current.focus();
       }
     }, 0);
-  }, [allowedBalanceNature, preloadedAccounts]);
+  }, [/* allowedBalanceNature, */ preloadedAccounts]);
 
   // Handle escape key
   useEffect(() => {
@@ -95,9 +96,11 @@ const AccountPickerModal = ({
   const groupedAccounts = () => {
     const grouped = {};
 
-    const filteredList = allowedBalanceNature
-      ? accounts.filter(a => a.balance_nature === allowedBalanceNature)
-      : accounts;
+    // TODO: temporarily disabled — re-enable when balance_nature data is reliable
+    // const filteredList = allowedBalanceNature
+    //   ? accounts.filter(a => a.balance_nature === allowedBalanceNature)
+    //   : accounts;
+    const filteredList = accounts;
 
     filteredList.forEach((account) => {
       if (!grouped[account.account_type]) {
