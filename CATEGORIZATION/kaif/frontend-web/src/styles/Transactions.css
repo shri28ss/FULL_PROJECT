@@ -675,7 +675,7 @@
   background: var(--glass-bg);
   border: 1px solid var(--glass-border);
   border-radius: 16px;
-  width: 740px;
+  width: 900px;
   max-width: 95vw;
   max-height: 80vh;
   display: flex;
@@ -697,7 +697,7 @@
 
 .similar-txn-row {
   display: grid;
-  grid-template-columns: 65px 1fr 90px 230px 36px;
+  grid-template-columns: 100px 1fr 100px 230px 36px;
   align-items: center;
   gap: 12px;
   padding: 10px 24px;
@@ -715,9 +715,8 @@
 }
 
 .similar-txn-details {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
   color: var(--text-primary);
 }
 

@@ -1109,7 +1109,7 @@ const Transactions = () => {
                   <div key={txn.transaction_id} className="similar-txn-row">
                     <div className="similar-txn-date">
                       {new Date(txn.transaction_date).toLocaleDateString('en-IN',
-                        { day: '2-digit', month: 'short' })}
+                        { year: 'numeric', month: 'short', day: '2-digit' })}
                     </div>
                     <div className="similar-txn-details" title={txn.details}>
                       {txn.details}
