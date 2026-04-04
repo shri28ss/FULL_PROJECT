@@ -154,8 +154,11 @@ async function processUploadSSE(req, res) {
           const trailingKeywordMatch = trimmedDetails.match(/-([A-Z]{4,})$/i)
             // Fallback: some parsers split words across lines e.g. "CREA M" → rejoin last two tokens
             || (() => {
-              const lastDashPart = trimmedDetails.split('-').pop()?.trim().replace(/\s+/g, '');
-              return lastDashPart && lastDashPart.length >= 4 ? [null, lastDashPart] : null;
+              const parts = trimmedDetails.split('-');
+              // Only apply fallback if there are actually multiple parts (has dashes)
+              if (parts.length <= 1) return null;
+              const lastDashPart = parts.pop()?.trim().replace(/\s+/g, '');
+              return lastDashPart && lastDashPart.length >= 4 && /^[A-Z]+$/i.test(lastDashPart) ? [null, lastDashPart] : null;
             })();
 
           if (trailingKeywordMatch) {
@@ -171,13 +174,16 @@ async function processUploadSSE(req, res) {
             const fallbackAccountId = txn.debit ? uncategorisedExpenseId : uncategorisedIncomeId;
 
             // Dump: no useful signal found
+            // Still persist extracted_id so similar-txn matching works later
             finalResults.push({
               ...txn,
               base_account_id: sourceAccountId,
               offset_account_id: categoryAccountId || fallbackAccountId,
               categorised_by: 'FILTER',
-              confidence_score: 1.00,
-              attention_level: 'LOW'
+              confidence_score: 0.00,
+              attention_level: 'HIGH',
+              is_uncategorised: true,
+              extracted_id: rulesResult.extractedId || null
             });
             continue;
           }
@@ -323,6 +329,7 @@ async function processUploadSSE(req, res) {
               match.offset_account_id = prediction.offset_account_id;
               match.categorised_by = prediction.categorised_by || 'LLM';
               match.confidence_score = prediction.confidence_score;
+              match.llm_merchant_name = prediction.llm_merchant_name || null;
               // Set attention level based on confidence
               if (prediction.confidence_score >= 0.8) {
                 match.attention_level = 'LOW';
@@ -368,6 +375,7 @@ async function processUploadSSE(req, res) {
               match.offset_account_id = prediction.offset_account_id;
               match.categorised_by = prediction.categorised_by || 'LLM';
               match.confidence_score = prediction.confidence_score;
+              match.llm_merchant_name = prediction.llm_merchant_name || null;
               // Set attention level based on confidence
               if (prediction.confidence_score >= 0.8) {
                 match.attention_level = 'LOW';
@@ -404,13 +412,29 @@ async function processUploadSSE(req, res) {
     // STAGE 5: APPLY FALLBACK & BATCH WRITE
     // ==========================================
     emit('Saving results…', 'saving');
+
+    const missingDocIds = finalResults.filter(item => !item.document_id);
+    if (missingDocIds.length > 0) {
+      logger.warn('Transactions missing document_id', {
+        count: missingDocIds.length,
+        sample: missingDocIds.slice(0, 3).map(t => ({
+          transaction_id: t.transaction_id,
+          uncategorized_transaction_id: t.uncategorized_transaction_id,
+          details: t.details?.slice(0, 50)
+        }))
+      });
+    }
+
     logger.info('Preparing batch write', {
       totalResults: finalResults.length,
       withBaseAccount: finalResults.filter(item => item.base_account_id).length,
-      withoutBaseAccount: finalResults.filter(item => !item.base_account_id).length
+      withoutBaseAccount: finalResults.filter(item => !item.base_account_id).length,
+      withDocumentId: finalResults.filter(item => item.document_id).length,
+      withoutDocumentId: missingDocIds.length
     });
 
     const transactionsBatch = finalResults
+      .filter(item => item.document_id)  // Skip transactions without valid document_id
       .map(item => {
         const transactionType = item.debit ? 'DEBIT' : 'CREDIT';
 
@@ -418,7 +442,7 @@ async function processUploadSSE(req, res) {
         let finalOffsetAccountId = item.offset_account_id;
         let finalCategorisedBy = item.categorised_by;
         let finalAttentionLevel = item.attention_level;
-        let isUncategorised = false;
+        let isUncategorised = item.is_uncategorised || false;
 
         if (!finalOffsetAccountId) {
           finalOffsetAccountId = transactionType === 'DEBIT'

@@ -80,6 +80,7 @@ IMPORTANT GUIDELINES:
 - ALWAYS try to assign a category - only use null if the transaction is completely unrecognizable
 - Use context clues: DINNER/BREAKFAST/FOOD → Food & Dining, NETFLIX/ENTERTAINMENT → Living Expenses or Personal Care
 - Be confident - if you're 50% sure or more, assign the category
+- Extract a clean merchant_name from the raw details — strip bank codes, transaction IDs, dates, and account numbers, keep only the meaningful entity name
 - Common patterns:
   * Food keywords (DINNER, BREAKFAST, RESTAURANT, CAFE) → Food & Dining
   * Transport (UBER, OLA, TAXI, METRO) → Travel & Transport
@@ -94,9 +95,19 @@ Required JSON Structure:
   {
     "transaction_id": "...",
     "suggested_account_id": 123,
-    "confidence": 0.85
+    "confidence": 0.85,
+    "merchant_name": "SWIGGY"
   }
 ]
+
+Rules for merchant_name:
+- Extract the actual merchant or entity name from the transaction details
+- For UPI: extract the business/person name, not the VPA suffix
+- For NEFT/IMPS: extract the sender/receiver name if present
+- For card transactions: extract the store/merchant name
+- Keep it short, clean, and uppercase (e.g. "SWIGGY", "ZOMATO", "HDFC RENT", "AMAZON")
+- Set to null only if no meaningful name can be extracted
+- Do NOT include transaction IDs, dates, bank codes, or account numbers
 
 Only set suggested_account_id to null if you truly cannot determine ANY reasonable category.`;
 
@@ -107,7 +118,7 @@ ${JSON.stringify(availableCategories, null, 2)}
 === TRANSACTIONS TO CATEGORIZE ===
 ${JSON.stringify(batch.map(t => ({
   transaction_id: t.uncategorized_transaction_id || t.transaction_id,
-  details: t.clean_merchant_name || t.details,
+  details: t.details,
   amount: t.debit || t.credit || 0,
   type: t.debit ? 'DEBIT' : 'CREDIT'
 })), null, 2)}
@@ -160,7 +171,7 @@ ${JSON.stringify(batch.map(t => ({
     const safeResults = [];
 
     for (const prediction of parsedPredictions) {
-      const { transaction_id, suggested_account_id, confidence } = prediction;
+      const { transaction_id, suggested_account_id, confidence, merchant_name } = prediction;
 
       // Safety Verification: Ensure suggested_account_id exists in available filters
       if (suggested_account_id && validAccountIds.has(suggested_account_id)) {
@@ -174,7 +185,8 @@ ${JSON.stringify(batch.map(t => ({
             ...originalTxn,
             categorised_by: 'LLM',
             offset_account_id: suggested_account_id,
-            confidence_score: parseFloat(confidence) || 0.50
+            confidence_score: parseFloat(confidence) || 0.50,
+            llm_merchant_name: merchant_name || null
           });
         }
       } else {

@@ -124,10 +124,10 @@ async function recategorizeTransaction(req, res) {
       return res.status(500).json({ error: 'Failed to recategorize transaction.' });
     }
 
-    // Fetch the just-updated transaction to get match fields
+    // Fetch the just-updated transaction to get match fields (include details for rules engine fallback)
     const { data: updatedTxn } = await supabase
       .from('transactions')
-      .select('extracted_id, transaction_type, offset_account_id')
+      .select('extracted_id, transaction_type, offset_account_id, details')
       .eq('transaction_id', transactionId)
       .eq('user_id', userId)
       .single();
@@ -136,7 +136,17 @@ async function recategorizeTransaction(req, res) {
     let suggestedAccount = null;
 
     if (updatedTxn) {
-      const { extracted_id, transaction_type, offset_account_id } = updatedTxn;
+      const { transaction_type, offset_account_id, details } = updatedTxn;
+
+      // If extracted_id wasn't stored (e.g. was dumped before bulkController fix),
+      // re-run the rules engine on `details` to recover the merchant key.
+      let extracted_id = updatedTxn.extracted_id;
+      if (!extracted_id && details) {
+        const rulesResult = rulesEngineService.evaluateTransaction(details);
+        if (rulesResult.hasRuleMatch && rulesResult.extractedId) {
+          extracted_id = rulesResult.extractedId;
+        }
+      }
 
       // Fetch account name for suggestedAccount
       const { data: suggestedAccountData } = await supabase
@@ -167,17 +177,18 @@ async function recategorizeTransaction(req, res) {
         .eq('user_id', userId)
         .eq('review_status', 'PENDING')
         .eq('transaction_type', transaction_type)
-        .eq('is_uncategorised', false)
         .neq('transaction_id', transactionId);
 
-      // Priority 1: match on extracted_id if available
-      // Priority 2: match on same offset_account_id (same category already assigned by pipeline)
-      //             but only HIGH/MEDIUM attention — low attention means pipeline was confident
+      // Priority 1: match on extracted_id (from DB or recovered via rules engine) — covers all
+      //             pending txns with the same merchant key regardless of categorisation state.
+      // Priority 2: fallback to same offset_account_id, HIGH/MEDIUM attention only,
+      //             and already-categorised rows (more conservative since less precise).
       if (extracted_id) {
         similarQuery = similarQuery.eq('extracted_id', extracted_id);
       } else {
         similarQuery = similarQuery
           .eq('offset_account_id', offset_account_id)
+          .eq('is_uncategorised', false)
           .in('attention_level', ['HIGH', 'MEDIUM']);
       }
 
@@ -517,6 +528,18 @@ async function manualCategorizeTransaction(req, res) {
 
       suggestedAccount = suggestedAccountData || null;
 
+      // Re-run rules engine on raw details — used for both similar-txn matching
+      // and cache seeding below. Runs once here and shared between both sections.
+      const rawDetails = uncatData.details || '';
+      const rulesResult = rulesEngineService.evaluateTransaction(rawDetails);
+
+      // If extracted_id wasn't stored (e.g. was dumped before bulkController fix),
+      // recover it now from the rules engine so the similar-txn query can use it.
+      let effectiveExtractedId = newTxn.extracted_id;
+      if (!effectiveExtractedId && rulesResult.hasRuleMatch && rulesResult.extractedId) {
+        effectiveExtractedId = rulesResult.extractedId;
+      }
+
       // Build match condition for similar transactions
       let similarQuery = supabase
         .from('transactions')
@@ -537,30 +560,28 @@ async function manualCategorizeTransaction(req, res) {
         .eq('user_id', userId)
         .eq('review_status', 'PENDING')
         .eq('transaction_type', newTxn.transaction_type)
-        .eq('is_uncategorised', false)
         .neq('transaction_id', newTxn.transaction_id);
 
-      // Priority 1: match on extracted_id if available
-      // Priority 2: match on same offset_account_id (same category already assigned by pipeline)
-      //             but only HIGH/MEDIUM attention — low attention means pipeline was confident
-      if (newTxn.extracted_id) {
-        similarQuery = similarQuery.eq('extracted_id', newTxn.extracted_id);
+      // Priority 1: match on extracted_id (from DB or recovered via rules engine) — covers all
+      //             pending txns with the same merchant key regardless of categorisation state.
+      // Priority 2: fallback to same offset_account_id, HIGH/MEDIUM attention only,
+      //             and already-categorised rows (more conservative since less precise).
+      if (effectiveExtractedId) {
+        similarQuery = similarQuery.eq('extracted_id', effectiveExtractedId);
       } else {
         similarQuery = similarQuery
           .eq('offset_account_id', newTxn.offset_account_id)
+          .eq('is_uncategorised', false)
           .in('attention_level', ['HIGH', 'MEDIUM']);
       }
 
       const { data: similar } = await similarQuery.limit(20);
       similarTransactions = similar || [];
 
-      // Seed personal cache based on whether the raw details is garbage
-      const rawDetails = uncatData.details || '';
-
-      // Check if there's a rule match to extract the ID
-      const rulesResult = rulesEngineService.evaluateTransaction(rawDetails);
-
-      if (rulesResult.hasRuleMatch && rulesResult.strategy === 'VECTOR_SEARCH' && rulesResult.extractedId) {
+      // Seed personal cache — rulesResult already computed above
+      // Cover both EXACT_THEN_DUMP (paytmqr, bharatpe etc.) and VECTOR_SEARCH rules
+      if (rulesResult.hasRuleMatch && rulesResult.extractedId &&
+          (rulesResult.strategy === 'EXACT_THEN_DUMP' || rulesResult.strategy === 'VECTOR_SEARCH')) {
         // Store the extracted ID in exact cache
         console.log(`💾 Storing in exact cache: "${rulesResult.extractedId}" for transaction: "${rawDetails}"`);
         await upsertExactCache(userId, rulesResult.extractedId, newTxn.offset_account_id);
