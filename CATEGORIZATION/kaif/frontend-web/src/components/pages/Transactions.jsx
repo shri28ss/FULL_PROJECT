@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import UploadModal from '../UploadModal';
+import { useNavigate } from 'react-router-dom';
 import AccountPickerModal from '../AccountPickerModal';
 import { Toast, useToast } from '../Toast';
 import { supabase } from '../../shared/supabase';
@@ -65,8 +65,8 @@ const AmountEditor = ({ txn, onSave, onCancel }) => {
 };
 
 const Transactions = () => {
+  const navigate = useNavigate();
   const { toasts, showToast } = useToast();
-  const [isUploadOpen, setIsUploadOpen] = useState(false);
   const [isCategorizing, setIsCategorizing] = useState(() => {
     return localStorage.getItem('isCategorizing') === 'true';
   });
@@ -98,6 +98,9 @@ const Transactions = () => {
   const [filterDocuments, setFilterDocuments] = useState([]); // { document_id, file_name }
   const [selectedAccountIds, setSelectedAccountIds] = useState(new Set());
   const [selectedDocIds, setSelectedDocIds] = useState(new Set());
+  const [txnTypeFilter, setTxnTypeFilter] = useState('ALL'); // 'ALL' | 'DEBIT' | 'CREDIT'
+  const [searchQuery, setSearchQuery] = useState('');
+  const [dateSortOrder, setDateSortOrder] = useState('desc'); // 'asc' | 'desc'
 
   const fetchTransactions = async (currentFilter = activeFilter, silent = false) => {
     if (!silent) setLoading(true);
@@ -244,9 +247,10 @@ const Transactions = () => {
   const clearAllFilters = () => {
     setSelectedAccountIds(new Set());
     setSelectedDocIds(new Set());
+    setTxnTypeFilter('ALL');
   };
 
-  const activeFilterCount = selectedAccountIds.size + selectedDocIds.size;
+  const activeFilterCount = selectedAccountIds.size + selectedDocIds.size + (txnTypeFilter !== 'ALL' ? 1 : 0);
 
   const handleAccountCreated = (newAccount) => {
     setCachedAccounts(prev => [...prev, newAccount]);
@@ -426,7 +430,7 @@ const Transactions = () => {
         offset_account_id: selectedAccount.account_id,
         accounts: { account_name: selectedAccount.account_name },
         categorised_by: 'MANUAL',
-        review_status: 'PENDING',
+        review_status: 'APPROVED',
         is_uncategorised: false,
       }]
     }));
@@ -447,6 +451,15 @@ const Transactions = () => {
         );
         const result = await response.json();
         if (response.ok) {
+          // Trigger auto-approve in the background
+          fetch(`${API_BASE_URL}/api/transactions/${transactionId}/approve`, {
+            method: 'PATCH',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${session?.access_token || ''}`
+            }
+          }).catch(console.error);
+
           if (result.similarTransactions && result.similarTransactions.length > 0) {
             setSimilarTxns(result.similarTransactions);
             setSimilarSuggestedAccount(result.suggestedAccount);
@@ -643,15 +656,35 @@ const Transactions = () => {
     })();
   };
 
-  const filteredTransactions = transactions.filter((txn) => {
+  // Transactions after secondary filters only (account / doc / type / search)
+  // used to compute per-tab counts that react to applied filters.
+  const secondaryFiltered = transactions.filter((txn) => {
+    const isCategorised = txn.transactions && txn.transactions.length > 0;
+    if (selectedAccountIds.size > 0 && !selectedAccountIds.has(txn.account_id)) return false;
+    if (selectedDocIds.size > 0 && !selectedDocIds.has(txn.document_id)) return false;
+    if (txnTypeFilter === 'DEBIT' && !(txn.debit > 0)) return false;
+    if (txnTypeFilter === 'CREDIT' && !(txn.credit > 0)) return false;
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      if (txn.details && txn.details.toLowerCase().includes(q)) return true;
+      if (txn.debit && txn.debit.toString().includes(q)) return true;
+      if (txn.credit && txn.credit.toString().includes(q)) return true;
+      if (isCategorised && txn.transactions[0].accounts?.account_name?.toLowerCase().includes(q)) return true;
+      return false;
+    }
+    return true;
+  });
+
+  const filteredTransactions = secondaryFiltered.filter((txn) => {
     const isCategorised = txn.transactions && txn.transactions.length > 0;
     if (activeFilter === 'PENDING_CAT' && isCategorised) return false;
     if (activeFilter === 'PENDING_APP' && !(isCategorised && txn.transactions[0].review_status === 'PENDING')) return false;
-    // Apply account filter
-    if (selectedAccountIds.size > 0 && !selectedAccountIds.has(txn.account_id)) return false;
-    // Apply document filter
-    if (selectedDocIds.size > 0 && !selectedDocIds.has(txn.document_id)) return false;
+    if (activeFilter === 'APPROVED' && !(isCategorised && txn.transactions[0].review_status === 'APPROVED')) return false;
     return true;
+  }).sort((a, b) => {
+    const tA = new Date(a.txn_date).getTime();
+    const tB = new Date(b.txn_date).getTime();
+    return dateSortOrder === 'asc' ? tA - tB : tB - tA;
   });
 
   const handleFilterChange = (newFilter) => {
@@ -730,12 +763,15 @@ const Transactions = () => {
     );
   };
 
-  const allCount = transactions.length;
-  const pendingCatCount = transactions.filter(t =>
+  const allCount = secondaryFiltered.length;
+  const pendingCatCount = secondaryFiltered.filter(t =>
     !(t.transactions && t.transactions.length > 0)
   ).length;
-  const pendingAppCount = transactions.filter(t =>
+  const pendingAppCount = secondaryFiltered.filter(t =>
     t.transactions?.[0]?.review_status === 'PENDING'
+  ).length;
+  const approvedCount = secondaryFiltered.filter(t =>
+    t.transactions?.[0]?.review_status === 'APPROVED'
   ).length;
 
   return (
@@ -745,11 +781,11 @@ const Transactions = () => {
           <h1 id="transactions-title">Transactions</h1>
           <p>Manage and categorize your bank statements and ledger entries.</p>
         </div>
-        <div class="header-actions">
+        <div className="header-actions">
           <button
             id="transactions-upload-btn"
             className="action-btn upload"
-            onClick={() => setIsUploadOpen(true)}
+            onClick={() => navigate('/parsing')}
             style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
           >
             <ICONS.Upload /> Upload
@@ -786,24 +822,50 @@ const Transactions = () => {
           id="transactions-tab-all"
           className={`filter-tab ${activeFilter === 'ALL' ? 'active' : ''}`}
           onClick={() => handleFilterChange('ALL')}
-        >All {allCount > 0 && <span className="filter-count-badge">{allCount}</span>}</button>
+        >All ({allCount})</button>
         <button
           id="transactions-tab-pending-cat"
           className={`filter-tab ${activeFilter === 'PENDING_CAT' ? 'active' : ''}`}
           onClick={() => handleFilterChange('PENDING_CAT')}
-        >Pending Categorisation {pendingCatCount > 0 && <span className="filter-count-badge">{pendingCatCount}</span>}</button>
+        >Pending Categorisation ({pendingCatCount})</button>
         <button
           id="transactions-tab-pending-app"
           className={`filter-tab ${activeFilter === 'PENDING_APP' ? 'active' : ''}`}
           onClick={() => handleFilterChange('PENDING_APP')}
-        >Pending Approval {pendingAppCount > 0 && <span className="filter-count-badge">{pendingAppCount}</span>}</button>
+        >Pending Approval ({pendingAppCount})</button>
+        <button
+          id="transactions-tab-approved"
+          className={`filter-tab ${activeFilter === 'APPROVED' ? 'active' : ''}`}
+          onClick={() => handleFilterChange('APPROVED')}
+        >Approved ({approvedCount})</button>
 
-        {/* ── Filter popup ── pushed to the right */}
-        <div className="filter-popup-wrapper" ref={filterRef} style={{ marginLeft: 'auto' }}>
+        {/* ── Search Input ── fills remaining space */}
+        <div className="search-input-wrapper" style={{ flex: 1, marginLeft: 'auto', display: 'flex', alignItems: 'stretch' }}>
+          <input
+            type="text"
+            placeholder="Search details, amounts, categories..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            style={{
+              padding: '0 12px',
+              borderRadius: '8px',
+              border: '1px solid var(--glass-border)',
+              background: 'var(--bg-secondary)',
+              color: 'var(--text-primary)',
+              fontSize: '13px',
+              outline: 'none',
+              width: '100%',
+              height: '100%',
+              boxSizing: 'border-box'
+            }}
+          />
+        </div>
+
+        {/* ── Filter popup ── */}
+        <div className="filter-popup-wrapper" ref={filterRef} style={{ marginLeft: '4px' }}>
           <button
             className={`filter-tab ${activeFilterCount > 0 ? 'filter-tab-active' : ''}`}
             onClick={() => setIsFilterOpen(v => !v)}
-            style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
           >
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="4" y1="6" x2="20" y2="6"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="11" y1="18" x2="13" y2="18"/></svg>
             Filter
@@ -819,6 +881,25 @@ const Transactions = () => {
                 {activeFilterCount > 0 && (
                   <button className="filter-clear-btn" onClick={clearAllFilters}>Clear all</button>
                 )}
+              </div>
+
+              {/* ── Debit / Credit ── */}
+              <div className="filter-group">
+                <div className="filter-group-label">Transaction Type</div>
+                {['ALL', 'DEBIT', 'CREDIT'].map(type => (
+                  <label key={type} className="filter-option">
+                    <input
+                      type="radio"
+                      name="txn-type-filter"
+                      value={type}
+                      checked={txnTypeFilter === type}
+                      onChange={() => setTxnTypeFilter(type)}
+                    />
+                    <span>
+                      {type === 'ALL' ? 'All' : type === 'DEBIT' ? '− Debit' : '+ Credit'}
+                    </span>
+                  </label>
+                ))}
               </div>
 
               {filterAccounts.length > 0 && (
@@ -854,10 +935,6 @@ const Transactions = () => {
                   ))}
                 </div>
               )}
-
-              {filterAccounts.length === 0 && filterDocuments.length === 0 && (
-                <p className="filter-empty">No filter options available yet.</p>
-              )}
             </div>
           )}
         </div>
@@ -876,10 +953,16 @@ const Transactions = () => {
                 <>
                   <div className="table-header grouped">
                     <div></div>
-                    <div>Date</div>
+                    <div
+                      style={{ cursor: 'pointer', userSelect: 'none', display: 'flex', alignItems: 'center', gap: '4px' }}
+                      onClick={() => setDateSortOrder(p => p === 'desc' ? 'asc' : 'desc')}
+                    >
+                      Date {dateSortOrder === 'desc' ? '↓' : '↑'}
+                    </div>
                     <div>Details</div>
                     <div>Amount</div>
-                    <div>Account</div>
+                    <div>Src Acc</div>
+                    <div>Dest Acc</div>
                     <div>Categorised By</div>
                   </div>
                   <div className="placeholder-rows">
@@ -932,6 +1015,7 @@ const Transactions = () => {
                               <div>{new Date(txn.txn_date).toLocaleDateString()}</div>
                               <div className="details-cell">{txn.details}</div>
                               {renderAmountCell(txn)}
+                              <div>{txn.source_account?.account_name || '-'}</div>
                               <div
                                 className={txn.transactions[0].accounts ? 'account-cell-clickable' : ''}
                                 onClick={() => { if (txn.transactions[0].accounts) setRecatTarget(txn); }}
@@ -964,17 +1048,25 @@ const Transactions = () => {
                 className="table-header"
                 style={{
                   gridTemplateColumns: activeFilter === 'PENDING_CAT'
-                    ? '110px 1fr 110px 150px 160px'
-                    : '110px 1fr 110px 150px 140px 160px 40px'
+                    ? '110px 1fr 110px 130px 150px 160px'
+                    : activeFilter === 'APPROVED'
+                    ? '110px 1fr 110px 130px 150px 140px'
+                    : '110px 1fr 110px 130px 150px 140px 160px 40px'
                 }}
               >
-                <div>Date</div>
+                <div
+                  style={{ cursor: 'pointer', userSelect: 'none', display: 'flex', alignItems: 'center', gap: '4px' }}
+                  onClick={() => setDateSortOrder(p => p === 'desc' ? 'asc' : 'desc')}
+                >
+                  Date {dateSortOrder === 'desc' ? '↓' : '↑'}
+                </div>
                 <div>Details</div>
                 <div>Amount</div>
-                <div>Account</div>
+                <div>Src Acc</div>
+                <div>Dest Acc</div>
                 {activeFilter !== 'PENDING_CAT' && <div>Categorised By</div>}
-                <div>Status</div>
-                {activeFilter !== 'PENDING_CAT' && <div>Actions</div>}
+                {activeFilter !== 'APPROVED' && <div>Status</div>}
+                {activeFilter !== 'PENDING_CAT' && activeFilter !== 'APPROVED' && <div>Actions</div>}
               </div>
               <div id="transactions-table" className="placeholder-rows">
                 {loading ? (
@@ -1016,13 +1108,16 @@ const Transactions = () => {
                         className={`table-row ${isApprovingBulk && selectedIds.has(transactionId) ? 'row-approving' : ''}`}
                         style={{
                           gridTemplateColumns: activeFilter === 'PENDING_CAT'
-                            ? '110px 1fr 110px 150px 160px'
-                            : '110px 1fr 110px 150px 140px 160px 40px'
+                            ? '110px 1fr 110px 130px 150px 160px'
+                            : activeFilter === 'APPROVED'
+                            ? '110px 1fr 110px 130px 150px 140px'
+                            : '110px 1fr 110px 130px 150px 140px 160px 40px'
                         }}
                       >
                         <div>{new Date(txn.txn_date).toLocaleDateString()}</div>
                         <div className="details-cell">{txn.details}</div>
                         {renderAmountCell(txn)}
+                        <div>{txn.source_account?.account_name || '-'}</div>
                         <div
                           className={
                             isCategorised && txn.transactions[0].accounts
@@ -1052,12 +1147,14 @@ const Transactions = () => {
                             {categorisedBy}
                           </div>
                         )}
-                        <div>
-                          <span className={`status-badge ${status.toLowerCase().replace(' ', '-')}`}>
-                            {status === 'PENDING' ? 'Pending Approval' : status}
-                          </span>
-                        </div>
-                        {activeFilter !== 'PENDING_CAT' && (
+                        {activeFilter !== 'APPROVED' && (
+                          <div>
+                            <span className={`status-badge ${status.toLowerCase().replace(' ', '-')}`}>
+                              {status === 'PENDING' ? 'Pending Approval' : status}
+                            </span>
+                          </div>
+                        )}
+                        {activeFilter !== 'PENDING_CAT' && activeFilter !== 'APPROVED' && (
                           <div className="actions-cell">
                             {status === 'PENDING' && isCategorised ? (
                               <button
@@ -1176,6 +1273,7 @@ const Transactions = () => {
                 (similarAccountOverrides[similarPickerTarget] || similarSuggestedAccount)?.account_id
               }
               preloadedAccounts={cachedAccounts}
+              onAccountCreated={handleAccountCreated}
               onSelect={(account) => {
                 setSimilarAccountOverrides(prev => ({
                   ...prev,
@@ -1188,12 +1286,7 @@ const Transactions = () => {
         </div>
       )}
 
-      {isUploadOpen && (
-        <UploadModal
-          onClose={() => setIsUploadOpen(false)}
-          onUploadSuccess={() => fetchTransactions(activeFilter)}
-        />
-      )}
+
       {recatTarget && (
         <AccountPickerModal
           onClose={() => setRecatTarget(null)}

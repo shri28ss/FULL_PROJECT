@@ -128,9 +128,11 @@ const AccountPickerModal = ({
   const groups = groupedAccounts();
 
   const handleAccountCreated = (newAccount) => {
-    setAccounts((prev) => [...prev, newAccount]);
+    // Notify parent so it can refresh its own account lists
     onAccountCreated?.(newAccount);
-    setShowAddAccount(false);
+    // Auto-select the newly created account and close the picker
+    onSelect(newAccount);
+    onClose();
   };
 
   return (

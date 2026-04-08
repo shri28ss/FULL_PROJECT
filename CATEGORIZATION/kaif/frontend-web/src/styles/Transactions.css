@@ -66,7 +66,7 @@
 .filter-tabs {
   display: flex;
   gap: 4px;
-  align-items: center;
+  align-items: stretch;
   margin-bottom: 16px;
 }
 
@@ -80,6 +80,11 @@
   background: var(--bg-secondary);
   color: var(--text-secondary);
   transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  height: 100%;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
 }
 
 .filter-tab:hover {
@@ -116,7 +121,7 @@
 
 .table-header {
   display: grid;
-  grid-template-columns: 110px 1fr 110px 150px 160px 80px;
+  grid-template-columns: 110px 1fr 110px 130px 150px 160px 80px;
   gap: 16px;
   padding: 16px 24px;
   background: rgba(0, 0, 0, 0.1);
@@ -145,7 +150,7 @@
 
 .table-row {
   display: grid;
-  grid-template-columns: 110px 1fr 110px 150px 160px 80px;
+  grid-template-columns: 110px 1fr 110px 130px 150px 160px 80px;
   gap: 16px;
   padding: 14px 24px;
   align-items: start;
@@ -302,7 +307,7 @@
 /* Grouped view styles */
 .table-header.grouped,
 .table-row.grouped {
-  grid-template-columns: 40px 110px 1fr 110px 150px 160px;
+  grid-template-columns: 40px 110px 1fr 110px 130px 150px 160px;
 }
 
 /* Attention group header */
