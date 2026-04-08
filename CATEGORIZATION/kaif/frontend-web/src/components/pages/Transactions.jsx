@@ -741,12 +741,13 @@ const Transactions = () => {
   return (
     <div className="transactions-container">
       <div className="page-header">
-        <div className="header-title">
-          <h1>Transactions</h1>
+        <div id="transactions-header-title" className="header-title">
+          <h1 id="transactions-title">Transactions</h1>
           <p>Manage and categorize your bank statements and ledger entries.</p>
         </div>
         <div class="header-actions">
           <button
+            id="transactions-upload-btn"
             className="action-btn upload"
             onClick={() => setIsUploadOpen(true)}
             style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
@@ -765,6 +766,7 @@ const Transactions = () => {
             </button>
           ) : (
             <button
+              id="transactions-categorize-btn"
               className={`action-btn ${isCategorizing ? 'categorising' : ''}`}
               onClick={handleCategorize}
               disabled={isCategorizing}
@@ -779,16 +781,19 @@ const Transactions = () => {
         </div>
       </div>
 
-      <div className="filter-tabs">
+      <div id="transactions-tabs" className="filter-tabs">
         <button
+          id="transactions-tab-all"
           className={`filter-tab ${activeFilter === 'ALL' ? 'active' : ''}`}
           onClick={() => handleFilterChange('ALL')}
         >All {allCount > 0 && <span className="filter-count-badge">{allCount}</span>}</button>
         <button
+          id="transactions-tab-pending-cat"
           className={`filter-tab ${activeFilter === 'PENDING_CAT' ? 'active' : ''}`}
           onClick={() => handleFilterChange('PENDING_CAT')}
         >Pending Categorisation {pendingCatCount > 0 && <span className="filter-count-badge">{pendingCatCount}</span>}</button>
         <button
+          id="transactions-tab-pending-app"
           className={`filter-tab ${activeFilter === 'PENDING_APP' ? 'active' : ''}`}
           onClick={() => handleFilterChange('PENDING_APP')}
         >Pending Approval {pendingAppCount > 0 && <span className="filter-count-badge">{pendingAppCount}</span>}</button>
@@ -971,7 +976,7 @@ const Transactions = () => {
                 <div>Status</div>
                 {activeFilter !== 'PENDING_CAT' && <div>Actions</div>}
               </div>
-              <div className="placeholder-rows">
+              <div id="transactions-table" className="placeholder-rows">
                 {loading ? (
                   <div className="empty-state">
                     <span className="spinner"></span>

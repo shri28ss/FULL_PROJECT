@@ -59,49 +59,7 @@ export const ParsingProvider = ({ children }) => {
                 setActiveDoc(prev => prev ? { ...prev, elapsedSeconds: prev.elapsedSeconds + 1 } : null);
             }, 1000);
 
-            if (pollRef.current) clearInterval(pollRef.current);
-            pollRef.current = setInterval(async () => {
-                try {
-                    const statusRes = await API.get(`/documents/status/${docId}`);
-                    const { status: docStatus, transaction_parsed_type: docParsedType } = statusRes.data;
-                    
-                    setActiveDoc(prev => {
-                        const newDoc = { 
-                            ...prev, 
-                            processingStatus: docStatus, 
-                            parsedType: docParsedType || prev?.parsedType 
-                        };
-
-                        // Update global progress gate
-                        const stepIdx = extractionSteps.findIndex(s => s.statuses.includes(docStatus));
-                        if (stepIdx > maxStepReached) {
-                            setMaxStepReached(stepIdx);
-                        }
-
-                        return newDoc;
-                    });
-
-                    if (["AWAITING_REVIEW", "APPROVE", "POSTED", "DONE"].includes(docStatus)) {
-                        stopPolling(docId, "DONE");
-                        setNotification({
-                            type: 'success',
-                            title: 'Extraction Complete',
-                            message: `Transactions for "${file.name}" have been extracted successfully.`,
-                            docId: docId
-                        });
-                    } else if (docStatus === "FAILED") {
-                        stopPolling(docId, "ERROR");
-                        setNotification({
-                            type: 'error',
-                            title: 'Extraction Failed',
-                            message: `Failed to process "${file.name}". Please check the file if it's protected or corrupted.`,
-                            docId: docId
-                        });
-                    }
-                } catch (err) {
-                    console.error("Polling error", err);
-                }
-            }, 2000);
+            startPolling(docId, file.name);
 
         } catch (err) {
             setIsExtracting(false);
@@ -109,6 +67,72 @@ export const ParsingProvider = ({ children }) => {
             setMaxStepReached(-1);
             throw err;
         }
+    };
+
+    const startPolling = (docId, fileName) => {
+        if (pollRef.current) clearInterval(pollRef.current);
+        pollRef.current = setInterval(async () => {
+            try {
+                const statusRes = await API.get(`/documents/status/${docId}`);
+                const { status: docStatus, transaction_parsed_type: docParsedType } = statusRes.data;
+                
+                setActiveDoc(prev => {
+                    const newDoc = { 
+                        ...prev, 
+                        processingStatus: docStatus, 
+                        parsedType: docParsedType || prev?.parsedType 
+                    };
+
+                    // Update global progress gate
+                    const stepIdx = extractionSteps.findIndex(s => s.statuses.includes(docStatus));
+                    if (stepIdx > maxStepReached) {
+                        setMaxStepReached(stepIdx);
+                    }
+
+                    return newDoc;
+                });
+
+                if (["AWAITING_REVIEW", "APPROVE", "POSTED", "DONE"].includes(docStatus)) {
+                    stopPolling(docId, "DONE");
+                    setNotification({
+                        type: 'success',
+                        title: 'Extraction Complete',
+                        message: `Transactions for "${fileName}" have been extracted successfully.`,
+                        docId: docId
+                    });
+                } else if (docStatus === "FAILED") {
+                    stopPolling(docId, "ERROR");
+                    setNotification({
+                        type: 'error',
+                        title: 'Extraction Failed',
+                        message: `Failed to process "${fileName}". Please check the file if it's protected or corrupted.`,
+                        docId: docId
+                    });
+                }
+            } catch (err) {
+                console.error("Polling error", err);
+            }
+        }, 2000);
+    };
+
+    const retryExtraction = (docId, fileName) => {
+        setIsExtracting(true);
+        setMaxStepReached(0);
+        setActiveDoc({
+            id: docId,
+            name: fileName,
+            status: "PROCESSING",
+            processingStatus: "UPLOADED",
+            elapsedSeconds: 0,
+            parsedType: null
+        });
+
+        if (timerRef.current) clearInterval(timerRef.current);
+        timerRef.current = setInterval(() => {
+            setActiveDoc(prev => prev ? { ...prev, elapsedSeconds: prev.elapsedSeconds + 1 } : null);
+        }, 1000);
+
+        startPolling(docId, fileName);
     };
 
     const stopPolling = (docId, finalStatus) => {
@@ -131,6 +155,7 @@ export const ParsingProvider = ({ children }) => {
             isExtracting,
             latestFinishedDocId,
             startExtraction,
+            retryExtraction,
             clearActiveDoc,
             setLatestFinishedDocId,
             notification,

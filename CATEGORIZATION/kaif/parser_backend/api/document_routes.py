@@ -378,7 +378,7 @@ async def get_recent_documents(user=Depends(get_current_user)):
         sb.table("documents")
         .select(
             "document_id, file_name, status, transaction_parsed_type, created_at, "
-            "statement_categories(institution_name)"
+            "statement_categories(institution_name, logic_version)"
         )
         .eq("user_id", user_id)
         .order("created_at", desc=True)
@@ -390,6 +390,7 @@ async def get_recent_documents(user=Depends(get_current_user)):
     for r in (result.data or []):
         cat = r.pop("statement_categories", None) or {}
         r["institution_name"] = cat.get("institution_name")
+        r["logic_version"] = cat.get("logic_version", 1)
         rows.append(r)
     return rows
 
@@ -401,7 +402,7 @@ async def get_document_review(document_id: int, user=Depends(get_current_user)):
 
     doc_result = (
         sb.table("documents")
-        .select("*, statement_categories(institution_name, statement_identifier)")
+        .select("*, statement_categories(institution_name, statement_identifier, logic_version)")
         .eq("document_id", document_id)
         .eq("user_id", user_id)
         .maybe_single()
@@ -454,6 +455,75 @@ async def get_document_review(document_id: int, user=Depends(get_current_user)):
 class ApprovalRequest(BaseModel):
     transactions: Optional[list] = None
     parser_type: Optional[str] = None
+
+
+class RetryRequest(BaseModel):
+    method: str  # "CODE", "VISION", "MANUAL"
+    note: Optional[str] = None
+
+
+@router.post("/{document_id}/retry")
+async def retry_extraction(
+    document_id: int,
+    body: RetryRequest,
+    user=Depends(get_current_user)
+):
+    user_id = user["user_id"]
+    sb = get_client()
+
+    doc_result = (
+        sb.table("documents")
+        .select("document_id, file_path, status")
+        .eq("document_id", document_id)
+        .eq("user_id", user_id)
+        .maybe_single()
+        .execute()
+    )
+    if not doc_result.data:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    doc = doc_result.data
+    storage_path = doc["file_path"]
+
+    # 1. Update status to UPLOADED
+    sb.table("documents").update({"status": "UPLOADED"}).eq("document_id", document_id).execute()
+
+    # 2. Re-trigger processing engine
+    # We need to download the file from Storage to a temp file for the engine to read
+    # or pass the storage path and let the engine handle it.
+    # Current engine expects a local file path.
+
+    def run_retry():
+        thread_sb = make_client()
+        set_thread_client(thread_sb)
+        tmp_file_path = None
+        try:
+            # Download from Supabase Storage
+            res = thread_sb.storage.from_(SUPABASE_STORAGE_BUCKET).download(storage_path)
+            
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                tmp.write(res)
+                tmp_file_path = tmp.name
+
+            from services.processing_engine import process_document
+            process_document(
+                document_id, 
+                override_file_path=tmp_file_path,
+                retry_mode=body.method,
+                retry_note=body.note
+            )
+        except Exception as e:
+            logger.error("[ERROR] Retry processing failed for doc %s: %s", document_id, e)
+            thread_sb.table("documents").update({"status": "FAILED"}).eq("document_id", document_id).execute()
+        finally:
+            clear_thread_client()
+            if tmp_file_path and os.path.exists(tmp_file_path):
+                os.remove(tmp_file_path)
+
+    thread = threading.Thread(target=run_retry, daemon=True)
+    thread.start()
+
+    return {"message": "Retry started", "document_id": document_id}
 
 
 @router.post("/{document_id}/approve")

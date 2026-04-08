@@ -96,6 +96,12 @@ def insert_text_extraction(document_id: int, extracted_text: str):
     }).execute()
 
 
+def get_text_extraction(document_id: int) -> str | None:
+    sb = get_client()
+    result = sb.table("document_text_extractions").select("extracted_text").eq("document_id", document_id).limit(1).execute()
+    return result.data[0]["extracted_text"] if result.data else None
+
+
 # ── STAGING TRANSACTIONS ────────────────────────────────
 
 def insert_staging_transactions(

@@ -2,7 +2,7 @@ import { useEffect, useState, useRef } from "react";
 import { motion } from "framer-motion";
 import {
     FileUp, CheckCircle, Loader2, AlertCircle, Search, Cpu, List, Lock,
-    FileText, Clock, ChevronDown, Table as TableIcon, Trash2
+    FileText, Clock, ChevronDown, Table as TableIcon, Trash2, RotateCcw, Code
 } from "lucide-react";
 import API from "../api/api";
 import { useNavigate } from "react-router-dom";
@@ -69,7 +69,7 @@ function CircularProgress({ processingStatus, status, elapsedSeconds, parsedType
 
 export default function ParsingPage() {
     const navigate = useNavigate();
-    const { activeDoc, isExtracting, startExtraction, clearActiveDoc, maxStepReached } = useParsing();
+    const { activeDoc, isExtracting, startExtraction, retryExtraction, clearActiveDoc, maxStepReached } = useParsing();
 
     const [file, setFile] = useState(null);
     const [password, setPassword] = useState("");
@@ -87,13 +87,19 @@ export default function ParsingPage() {
     const [deleteTarget, setDeleteTarget] = useState(null);
     const [isDeleting, setIsDeleting] = useState(false);
 
+    // Retry Modal State
+    const [isRetryModalOpen, setIsRetryModalOpen] = useState(false);
+    const [retryDoc, setRetryDoc] = useState(null); // { id, name, logic_version }
+    const [retryMethod, setRetryMethod] = useState("CODE");
+    const [retryNote, setRetryNote] = useState("");
+    const [isRetrying, setIsRetrying] = useState(false);
+
     const sortOptions = ["Newest first", "Oldest first", "Last activity", "Alphabetically"];
 
     useEffect(() => {
         fetchData();
     }, []);
 
-    // Also fetch data when a doc finishes to show it in table
     useEffect(() => {
         if (!isExtracting && activeDoc?.status === "DONE") {
             fetchData();
@@ -116,6 +122,27 @@ export default function ParsingPage() {
         }
     };
 
+    const handleRetryExtraction = async () => {
+        if (!retryDoc) return;
+        setIsRetrying(true);
+        try {
+            await API.post(`/documents/${retryDoc.id}/retry`, {
+                method: retryMethod,
+                note: retryNote
+            });
+            
+            retryExtraction(retryDoc.id, retryDoc.name);
+            
+            setIsRetryModalOpen(false);
+            fetchData();
+        } catch (err) {
+            console.error(err);
+            alert("Retry failed: " + (err.response?.data?.detail || err.message));
+        } finally {
+            setIsRetrying(false);
+        }
+    };
+
     const sortedDocs = [...recentDocs].sort((a, b) => {
         if (sortOption === "Newest first") return new Date(b.created_at) - new Date(a.created_at);
         if (sortOption === "Oldest first") return new Date(a.created_at) - new Date(b.created_at);
@@ -131,24 +158,16 @@ export default function ParsingPage() {
         if (!deleteTarget || isDeleting) return;
         const { id, name } = deleteTarget;
         setIsDeleting(true);
-        setError(""); // Clear any previous dashboard errors
+        setError(""); 
 
         try {
-            // 1. Perform deletion
             await API.delete(`/documents/${id}`);
-            
-            // 2. Optimistically update local list for immediate UI feedback
             setRecentDocs(prev => prev.filter(d => d.document_id !== id));
-            
-            // 3. Refresh stats and data in background
             const statsRes = await API.get("/documents/stats");
             setStats(statsRes.data);
-            
-            // 4. Close modal
             setDeleteTarget(null);
         } catch (err) {
             console.error("Delete failed", err);
-            // If the document is already gone (404), we just consider it a success for the user
             if (err.response?.status === 404) {
                 setRecentDocs(prev => prev.filter(d => d.document_id !== id));
                 setDeleteTarget(null);
@@ -404,14 +423,28 @@ export default function ParsingPage() {
                                     <span style={{
                                         display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                                         padding: '4px 12px', borderRadius: '20px',
-                                        background: doc.status === 'APPROVE' ? 'rgba(127, 175, 138, 0.1)' : 'rgba(0,0,0,0.05)',
-                                        color: doc.status === 'APPROVE' ? 'var(--accent-color)' : 'var(--text-secondary)',
-                                        fontSize: '0.7rem', fontWeight: 800
+                                        background: doc.status === 'APPROVE' ? 'rgba(127, 175, 138, 0.15)' : 'rgba(243, 156, 18, 0.1)',
+                                        color: doc.status === 'APPROVE' ? 'var(--accent-color)' : '#92400e',
+                                        fontSize: '0.7rem', fontWeight: 800,
+                                        gap: '4px'
                                     }}>
-                                        {doc.status === 'APPROVE' ? 'Approved' : 'Pending Approval'}
+                                        {doc.status === 'APPROVE' ? <><CheckCircle size={12} /> Approved</> : <><div style={{ width: 6, height: 6, borderRadius: '50%', background: '#f39c12' }} /> Pending approval</>}
                                     </span>
                                 </td>
-                                <td style={{ textAlign: 'center' }}><span style={{ background: '#fef3c7', color: '#92400e', padding: '2px 8px', borderRadius: '20px', fontSize: '0.7rem', fontWeight: 800 }}>{doc.transaction_parsed_type || 'CODE'}</span></td>
+                                <td style={{ textAlign: 'center' }}><span style={{ 
+                                    background: 'rgba(72, 62, 168, 0.08)', 
+                                    color: 'var(--primary-action)', 
+                                    padding: '4px 10px', 
+                                    borderRadius: '8px', 
+                                    fontSize: '0.7rem', 
+                                    fontWeight: 800,
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '6px',
+                                    border: '1px solid rgba(72, 62, 168, 0.2)'
+                                }}>
+                                    <Code size={12} /> {doc.transaction_parsed_type || 'CODE'}
+                                </span></td>
                                 <td style={{ textAlign: 'center', fontSize: '0.8rem' }}>{new Date(doc.created_at).toLocaleDateString()}</td>
                                 <td style={{ textAlign: 'center', padding: '1rem 2rem' }}>
                                     <div style={{ display: 'flex', gap: '0.6rem', justifyContent: 'center' }}>
@@ -434,6 +467,31 @@ export default function ParsingPage() {
                                         >
                                             <TableIcon size={14} /> Transactions
                                         </button>
+                                        {doc.status !== 'APPROVE' && (
+                                            <button 
+                                                onClick={() => {
+                                                    setRetryDoc({ id: doc.document_id, name: doc.file_name, logic_version: doc.logic_version });
+                                                    setIsRetryModalOpen(true);
+                                                }} 
+                                                title="Retry Extraction"
+                                                style={{ 
+                                                    background: 'rgba(243, 156, 18, 0.05)', 
+                                                    border: '1px solid rgba(243, 156, 18, 0.3)', 
+                                                    padding: '6px 10px', 
+                                                    borderRadius: '8px', 
+                                                    color: '#f39c12', 
+                                                    cursor: 'pointer',
+                                                    transition: 'all 0.2s',
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    justifyContent: 'center'
+                                                }}
+                                                onMouseOver={(e) => e.currentTarget.style.transform = 'rotate(180deg)'}
+                                                onMouseOut={(e) => e.currentTarget.style.transform = 'rotate(0deg)'}
+                                            >
+                                                <RotateCcw size={16} />
+                                            </button>
+                                        )}
                                         <button 
                                             onClick={() => handleDeleteDocument(doc.document_id, doc.file_name)} 
                                             style={{ 
@@ -519,6 +577,122 @@ export default function ParsingPage() {
                                 ) : (
                                     "Delete Document"
                                 )}
+                            </button>
+                        </div>
+                    </motion.div>
+                </div>
+            )}
+
+            {/* Retry Extraction Modal */}
+            {isRetryModalOpen && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(10px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 11000 }}>
+                    <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} style={{ background: 'var(--bg-secondary)', padding: '2.5rem', borderRadius: '24px', border: '1px solid var(--glass-border)', maxWidth: '500px', width: '90%', boxShadow: '0 25px 60px -12px rgba(0,0,0,0.4)', color: 'var(--text-primary)' }}>
+                        <h3 style={{ fontSize: '1.25rem', fontWeight: 800, marginBottom: '0.75rem' }}>Retry extraction</h3>
+                        <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', marginBottom: '2rem', lineHeight: 1.6 }}>
+                            Choose a different extraction method for <b>{retryDoc?.name}</b>.
+                        </p>
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '2rem' }}>
+                            <label style={{ fontSize: '0.85rem', fontWeight: 700, marginBottom: '4px' }}>Extraction method</label>
+                            
+                            {[
+                                { id: 'CODE', label: 'Code-based (current)', sub: 'Fastest extraction method' },
+                                { id: 'VISION', label: 'AI vision extraction', sub: 'Better for scanned or image-based PDFs', recommended: true },
+                                { id: 'MANUAL', label: 'Manual entry', sub: 'Set status to review and add manually' }
+                            ].map(method => (
+                                <div 
+                                    key={method.id}
+                                    onClick={() => setRetryMethod(method.id)}
+                                    style={{ 
+                                        padding: '1rem', 
+                                        borderRadius: '12px', 
+                                        border: `2px solid ${retryMethod === method.id ? 'var(--primary-action)' : 'var(--border-color)'}`,
+                                        background: retryMethod === method.id ? 'rgba(72, 62, 168, 0.05)' : 'var(--bg-primary)',
+                                        cursor: 'pointer',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '12px',
+                                        transition: 'all 0.2s'
+                                    }}
+                                >
+                                    <div style={{ 
+                                        width: '20px', height: '20px', borderRadius: '50%', 
+                                        border: `2px solid ${retryMethod === method.id ? 'var(--primary-action)' : 'var(--border-color)'}`,
+                                        display: 'flex', alignItems: 'center', justifyContent: 'center'
+                                    }}>
+                                        {retryMethod === method.id && <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: 'var(--primary-action)' }} />}
+                                    </div>
+                                    <div style={{ flex: 1 }}>
+                                        <div style={{ fontWeight: 700, fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                            {method.label}
+                                            {method.recommended && <span style={{ background: 'rgba(72, 62, 168, 0.1)', color: 'var(--primary-action)', fontSize: '0.65rem', padding: '2px 8px', borderRadius: '20px' }}>Recommended</span>}
+                                        </div>
+                                        <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{method.sub}</div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+
+                        {retryDoc?.logic_version >= 3 && (
+                            <div style={{ 
+                                padding: '1rem', 
+                                background: 'rgba(231, 76, 60, 0.08)', 
+                                border: '1px solid rgba(231, 76, 60, 0.2)', 
+                                borderRadius: '12px', 
+                                marginBottom: '2rem', 
+                                display: 'flex', 
+                                gap: '12px' 
+                            }}>
+                                <AlertCircle size={20} color="#e74c3c" style={{ flexShrink: 0 }} />
+                                <div style={{ fontSize: '0.8rem', color: '#e74c3c', lineHeight: 1.5, fontWeight: 500 }}>
+                                    <b>AI reaches its limit:</b> This format has been refined {retryDoc.logic_version} times. Artificial Intelligence is struggling to fix this structure. We recommend using <b>AI Vision</b> or manually editing the transactions.
+                                </div>
+                            </div>
+                        )}
+
+                        <div style={{ marginBottom: '2rem' }}>
+                            <label style={{ fontSize: '0.85rem', fontWeight: 700, display: 'block', marginBottom: '8px' }}>Reason / note <span style={{ fontWeight: 500, opacity: 0.6 }}>(optional)</span></label>
+                            <textarea 
+                                value={retryNote}
+                                onChange={(e) => setRetryNote(e.target.value)}
+                                placeholder="e.g. Transactions are missing from page 3 onwards..."
+                                style={{ 
+                                    width: '100%', minHeight: '100px', padding: '0.875rem', 
+                                    borderRadius: '12px', background: 'var(--bg-primary)', 
+                                    border: '1px solid var(--border-color)', color: 'var(--text-primary)',
+                                    resize: 'vertical', fontSize: '0.9rem', outline: 'none'
+                                }}
+                            />
+                        </div>
+
+                        <div style={{ display: 'flex', gap: '1rem' }}>
+                            <button 
+                                onClick={() => setIsRetryModalOpen(false)} 
+                                disabled={isRetrying}
+                                style={{ flex: 1, padding: '0.875rem', borderRadius: '12px', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', fontWeight: 700, cursor: isRetrying ? 'not-allowed' : 'pointer', color: 'var(--text-secondary)' }}
+                            >
+                                Cancel
+                            </button>
+                            <button 
+                                onClick={handleRetryExtraction} 
+                                disabled={isRetrying}
+                                style={{ 
+                                    flex: 1.5, 
+                                    padding: '0.875rem', 
+                                    borderRadius: '12px', 
+                                    border: 'none', 
+                                    background: 'var(--primary-action)', 
+                                    color: 'white', 
+                                    fontWeight: 700, 
+                                    cursor: isRetrying ? 'not-allowed' : 'pointer',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    gap: '8px'
+                                }}
+                            >
+                                {isRetrying ? <Loader2 size={18} className="spin-icon" /> : <RotateCcw size={18} />}
+                                START RETRY
                             </button>
                         </div>
                     </motion.div>

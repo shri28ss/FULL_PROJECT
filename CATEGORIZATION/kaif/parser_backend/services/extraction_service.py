@@ -61,6 +61,80 @@ def generate_extraction_logic_llm(
     return raw_output
 
 
+def refine_extraction_logic_llm(
+    current_logic: str,
+    user_feedback: str,
+    text_sample: str,
+) -> str:
+    """
+    Takes existing extraction code and user feedback, and uses LLM to 'fix' or 'refine' it.
+    This is used during retries when a user provides specific notes about errors.
+    """
+    logger.info("Refining extraction logic based on user feedback: %s", user_feedback)
+
+    prompt = f"""
+You are an expert Python data engineer. You are fixing a broken financial statement parser.
+
+════════════════════════════════════════════
+USER FEEDBACK: THE BUG REPORT
+════════════════════════════════════════════
+{user_feedback}
+
+════════════════════════════════════════════
+THE CURRENT (FAILING) CODE
+════════════════════════════════════════════
+{current_logic}
+
+════════════════════════════════════════════
+DOCUMENT TEXT (RAW SAMPLE)
+════════════════════════════════════════════
+{text_sample[:25000]}
+
+════════════════════════════════════════════
+YOUR MISSION: FIX THE PATTERN
+════════════════════════════════════════════
+Rewrite the `extract_transactions` function to be a state-based processor.
+
+1. **Transaction Starter**: A transaction ALWAYS starts with a date pattern (e.g., DD/MM/YY). 
+2. **Multi-line Narration**: Once a transaction is detected, keep accumulating all text until NOTHING remains or the NEXT transaction date is found. Do NOT strip narration after the first line.
+3. **Column Logic**: 
+   - Identify the 'Withdrawal' and 'Deposit' columns correctly. 
+   - Skip 'Chq/Ref No' and 'Value Date' columns—these are noise.
+   - If the logic is capturing 03 or 21 from a date like 03/07/21 into an amount field, YOUR REGEX IS WRONG. Correct it.
+4. **Data Cleaning**: 
+   - Strip 'Chq./Ref.No.' digit strings from the 'details' field. 
+   - Details must only contain the narration.
+5. **Output Schema**: Return a list of dicts with:
+   {{
+     "date": "YYYY-MM-DD",
+     "details": str,
+     "debit": float|None,
+     "credit": float|None,
+     "balance": float|None,
+     "confidence": float
+   }}
+6. **Generality**: Write code that handles the entire format dynamically. Do not hard-code row numbers. 
+
+Return ONLY the code block. No explanation. 
+"""
+
+
+    code_gen_client = get_code_gen_client()
+    content = code_gen_client.generate(prompt, max_retries=2)
+
+    if not content:
+        raise ValueError("LLM returned empty refinement.")
+
+    fixed_code = _strip_markdown(content)
+    
+    # Validate
+    val_err = validate_code(fixed_code)
+    if val_err:
+        raise ValueError(f"Refined code failed security validation: {val_err}")
+
+    return fixed_code
+
+
 
 # ═══════════════════════════════════════════════════════════
 # EXECUTE EXTRACTION CODE

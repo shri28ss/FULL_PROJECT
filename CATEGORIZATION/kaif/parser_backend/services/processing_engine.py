@@ -12,8 +12,10 @@ from services.identifier_service import (
 from services.extraction_service import (
     generate_extraction_logic_llm,
     extract_transactions_using_logic,
+    refine_extraction_logic_llm,
 )
 from services.llm_parser import parse_with_llm
+from db.connection import get_client, make_client, set_thread_client, clear_thread_client
 from services.validation_service import (
     validate_transactions,
     extract_json_from_response,
@@ -31,11 +33,14 @@ from repository.document_repo import (
     update_processing_complete,
     insert_staging_transactions,
     insert_staging_code_only,
+    get_text_extraction,
 )
 from repository.statement_category_repo import (
     activate_statement_category,
     update_statement_status,
     update_success_rate,
+    get_statement_by_id,
+    update_extraction_logic,
 )
 
 logger = logging.getLogger("ledgerai.processing_engine")
@@ -45,7 +50,7 @@ logger = logging.getLogger("ledgerai.processing_engine")
 # MAIN PIPELINE
 # ═══════════════════════════════════════════════════════════
 
-def process_document(document_id: int, override_file_path: str = None):
+def process_document(document_id: int, override_file_path: str = None, retry_mode: str = "AUTO", retry_note: str = None):
     """
     Main entry point. Called after document is inserted into DB.
     Runs the complete pipeline: extract → identify → parse → validate → stage.
@@ -83,7 +88,12 @@ def process_document(document_id: int, override_file_path: str = None):
         logger.info("═" * 70)
 
         update_processing_start(document_id)
-        insert_audit(document_id, "PROCESSING")
+        insert_audit(document_id, "EXTRACTING_TEXT", f"Mode: {retry_mode}")
+
+        # Cleanup old staging rows if this is a retry
+        if retry_mode != "AUTO":
+             sb = get_client()
+             sb.table("ai_transactions_staging").delete().eq("document_id", document_id).execute()
 
         # ─────────────────────────────────────────────────────
         # STEP 2 — EXTRACT TEXT FROM PDF
@@ -92,12 +102,20 @@ def process_document(document_id: int, override_file_path: str = None):
         logger.info("[STEP 2/5] Extracting text from PDF...")
         update_document_status(document_id, "EXTRACTING_TEXT")
 
-        full_text = extract_pdf_text(file_path, password)
-        if not full_text:
-            raise ValueError("PDF extraction returned empty text.")
+        full_text = None
+        if retry_mode != "AUTO":
+            full_text = get_text_extraction(document_id)
+        
+        if full_text:
+            logger.info("Found existing text extraction in DB — skipping PDF extraction")
+        else:
+            full_text = extract_pdf_text(file_path, password)
+            if not full_text:
+                raise ValueError("PDF extraction returned empty text.")
+            insert_text_extraction(document_id, full_text)
+
         sample_text = full_text[:20000]
-        # Split full_text into per-page list using the === PAGE N === separators
-        # that EnhancedFinancialPDFExtractor produces
+        # Split full_text into per-page list
         pages = [
             block.strip()
             for block in re.split(r'={80}', full_text)
@@ -106,37 +124,44 @@ def process_document(document_id: int, override_file_path: str = None):
         if not pages:
             pages = [full_text]
 
-
         logger.info("pages     : %d", len(pages))
         logger.info("chars     : %d", len(full_text))
-        logger.info("Text extracted successfully")
+        logger.info("Text handled successfully")
         logger.info("═" * 70)
 
-        insert_text_extraction(document_id, full_text)
+        if retry_mode == "MANUAL":
+            logger.info("MANUAL mode — skipping automatic extraction")
+            update_document_status(document_id, "AWAITING_REVIEW")
+            insert_staging_code_only(document_id, user_id, [], 1.0) # Empty placeholder
+            insert_audit(document_id, "COMPLETED", "Manual entry requested: " + (retry_note or ""))
+            return
+
         update_document_status(document_id, "IDENTIFYING_FORMAT")
 
         # ─────────────────────────────────────────────────────
-        # STEP 3 — CLASSIFY via LLM, then check DB for existing match
-        # check_format_exists needs the identifier_json (institution +
-        # format_name + table columns), so we always classify first.
+        # STEP 3 — CLASSIFY
         # ─────────────────────────────────────────────────────
         logger.info("")
-        logger.info("[STEP 3/5] Generating identification markers via LLM...")
+        logger.info("[STEP 3/5] Identifying statement format...")
 
-        identity_json = classify_document_llm(pages)
+        existing = None
+        identity_json = None
 
-        logger.info("Family      : %s", identity_json.get("document_family", "?"))
-        logger.info("Institution : %s", identity_json.get("institution_name", "?"))
-        logger.info("Layout      : %s", identity_json.get("parsing_hints", {}).get("layout_type", "?"))
-        logger.info("Boundaries  : %s", identity_json.get("parsing_hints", {}).get("transaction_boundary_signals"))
-        logger.info("ID          : %s", identity_json.get("id"))
-        logger.info("Identification markers generated")
-        logger.info("═" * 70)
+        # Optimization: check if statement_id is already linked to doc
+        if retry_mode != "AUTO" and doc.get("statement_id"):
+            existing = get_statement_by_id(doc["statement_id"])
+            if existing:
+                identity_json = existing.get("statement_identifier", {})
+                logger.info("REUSING IDENTIFICATION: using linked statement_id=%s", doc["statement_id"])
 
-        logger.info("")
-        logger.info("[STEP 3b/5] Checking if format exists in database...")
-        existing = check_format_exists(identity_json)
-        matched  = existing is not None
+        if not existing:
+            logger.info("Generating identification markers via LLM...")
+            identity_json = classify_document_llm(pages)
+            logger.info("Identification generated: %s", identity_json.get("id"))
+            logger.info("Checking if format exists in database...")
+            existing = check_format_exists(identity_json)
+
+        matched = existing is not None
 
         if matched:
             logger.info("EXISTING FORMAT DETECTED")
@@ -160,6 +185,22 @@ def process_document(document_id: int, override_file_path: str = None):
             statement_status = existing.get("status")
 
             update_document_statement(document_id, statement_id)
+
+            # --- LOGIC REFINEMENT (Triggered by Retry Note) ---
+            if retry_mode == "CODE" and retry_note and extraction_code:
+                try:
+                    logger.info("REFINEMENT: Feedback detected for existing format — attempting to improve logic...")
+                    refined_code = refine_extraction_logic_llm(
+                        current_logic = extraction_code,
+                        user_feedback = retry_note,
+                        text_sample   = sample_text
+                    )
+                    if refined_code:
+                        logger.info("REFINEMENT: Logic improved successfully. Updating DB.")
+                        update_extraction_logic(statement_id, refined_code)
+                        extraction_code = refined_code
+                except Exception as e:
+                    logger.warning("REFINEMENT: Logic improvement failed: %s", e)
 
             # ── CASE A1 — ACTIVE → Fast path (CODE ONLY, no LLM) ──
             if statement_status == "ACTIVE":
@@ -218,37 +259,91 @@ def process_document(document_id: int, override_file_path: str = None):
             logger.info("Saved as statement_id=%s (UNDER_REVIEW)", statement_id)
 
         # ═══════════════════════════════════════════════════
-        # STEP 4 — DUAL EXTRACTION (CODE + LLM in parallel)
-        # Reached for: NEW formats + UNDER_REVIEW formats
+        # STEP 4 — TRANSACTIONS EXTRACTION
         # ═══════════════════════════════════════════════════
         logger.info("")
-        logger.info("[STEP 4/5] Running DUAL PIPELINE (CODE + LLM in parallel)...")
+        logger.info("[STEP 4/5] Running Transaction Extraction (mode=%s)...", retry_mode)
 
         code_txns = []
         llm_txns  = []
 
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            future_code = executor.submit(
-                extract_transactions_using_logic, full_text, extraction_code
-            )
-            future_llm = executor.submit(
-                parse_with_llm, full_text, identity_json
-            )
-
-            # LLM — critical path (user always gets transactions even if CODE fails)
+        # ── CASE 1: CODE-ONLY RETRY ──
+        if retry_mode == "CODE":
             try:
-                llm_response = future_llm.result()
-                llm_txns     = extract_json_from_response(llm_response)
-                logger.info("LLM extraction complete: %d transactions", len(llm_txns))
-            except Exception as e:
-                logger.error("LLM extraction FAILED: %s", e)
-
-            # CODE — best-effort (failure falls back to LLM)
-            try:
-                code_txns = future_code.result()
+                code_txns = extract_transactions_using_logic(full_text, extraction_code)
                 logger.info("CODE extraction complete: %d transactions", len(code_txns))
             except Exception as e:
-                logger.warning("CODE extraction FAILED (will use LLM): %s", e)
+                logger.error("CODE extraction FAILED: %s", e)
+            
+            # Outcome: Code always wins if it produced anything
+            final_parser_type = "CODE"
+            update_processing_complete(document_id, final_parser_type)
+            insert_staging_code_only(document_id, user_id, code_txns, 100.0)
+            update_document_status(document_id, "AWAITING_REVIEW")
+            insert_audit(document_id, "COMPLETED", "Code-only retry")
+            logger.info("═" * 70)
+            return
+
+        # ── CASE 2: VISION-ONLY RETRY ──
+        if retry_mode == "VISION":
+            logger.info("VISION mode — skipping dual pipeline")
+            # Will be handled by vision block below
+
+        # ── CASE 3: STANDARD DUAL PIPELINE ──
+        else:
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                future_code = executor.submit(
+                    extract_transactions_using_logic, full_text, extraction_code
+                )
+                future_llm = executor.submit(
+                    parse_with_llm, full_text, identity_json
+                )
+
+                try:
+                    llm_response = future_llm.result()
+                    llm_txns     = extract_json_from_response(llm_response)
+                    logger.info("LLM extraction complete: %d transactions", len(llm_txns))
+                except Exception as e:
+                    logger.error("LLM extraction FAILED: %s", e)
+
+                try:
+                    code_txns = future_code.result()
+                    logger.info("CODE extraction complete: %d transactions", len(code_txns))
+                except Exception as e:
+                    logger.warning("CODE extraction FAILED: %s", e)
+
+        # ── VISION EXTRACTION OVERRIDE ──
+        if retry_mode == "VISION":
+            logger.info("")
+            logger.info("[STEP 4v/5] Running VISION EXTRACTION (Multimodal)...")
+            from services.llm_parser import parse_with_vision
+            try:
+                # Open the file again to send bytes
+                with open(file_path, "rb") as f:
+                    pdf_bytes = f.read()
+                
+                vision_response = parse_with_vision(pdf_bytes, identity_json, retry_note)
+                llm_txns = extract_json_from_response(vision_response)
+                logger.info("VISION extraction complete: %d transactions", len(llm_txns))
+                
+                # In VISION mode, LLM (vision) always wins unless it fails
+                if llm_txns:
+                    final_parser_type = "LLM"
+                    update_processing_complete(document_id, final_parser_type)
+                    insert_staging_transactions(
+                        document_id=document_id,
+                        user_id=user_id,
+                        code_txns=code_txns,
+                        llm_txns=llm_txns,
+                        code_confidence=0.5,
+                        llm_confidence=0.9,
+                    )
+                    update_document_status(document_id, "AWAITING_REVIEW")
+                    insert_audit(document_id, "COMPLETED", "Vision extraction used: " + (retry_note or ""))
+                    return
+            except Exception as e:
+                logger.error("VISION extraction FAILED: %s", e)
+                # Fall through to normal decision if vision fails
 
         logger.info("Results: CODE=%d txns | LLM=%d txns", len(code_txns), len(llm_txns))
 
@@ -274,18 +369,54 @@ def process_document(document_id: int, override_file_path: str = None):
         code_is_strict = validate_code_quality_strict(code_txns)
         code_passes_quality = code_is_proper and code_is_strict
 
+        has_code = len(code_txns) > 0
+        has_llm  = len(llm_txns) > 0
+
         logger.info("Code accuracy    : %.2f%%", comparison_score)
         logger.info("Code confidence  : %.2f",   code_confidence)
         logger.info("LLM confidence   : %.2f",   llm_confidence)
         logger.info("Code propriety   : %s",      "PASS" if code_is_proper else "FAIL")
         logger.info("Code strict gate : %s",      "PASS" if code_is_strict else "FAIL")
+        logger.info("Has CODE txns    : %s",      has_code)
+        logger.info("Has LLM txns     : %s",      has_llm)
 
-        # Decision: 90% weighted accuracy + both quality gates → CODE wins
-        if comparison_score >= 90 and code_passes_quality:
+        # ── CASE 3: CODE extracted, LLM returned nothing ──────────────────────
+        # LLM failed (truncation / timeout / parse error) — do not punish CODE.
+        # Status stays EXPERIMENTAL because there is no LLM ground truth to
+        # validate against, so we cannot promote to ACTIVE yet.
+        if has_code and not has_llm:
+            if code_passes_quality:
+                final_parser_type    = "CODE"
+                new_statement_status = "EXPERIMENTAL"
+                logger.info("DECISION: CODE WINS — LLM returned 0 transactions (no ground truth to compare)")
+                logger.info("Format status → EXPERIMENTAL (cannot promote to ACTIVE without LLM ground truth)")
+            else:
+                # CODE extracted something but failed quality gates, LLM is empty —
+                # nothing trustworthy from either side. Keep EXPERIMENTAL and use CODE
+                # so the user at least sees something rather than blank transactions.
+                final_parser_type    = "CODE"
+                new_statement_status = "EXPERIMENTAL"
+                logger.warning(
+                    "DECISION: CODE (quality gates FAILED) — LLM also returned 0 transactions. "
+                    "Using CODE as best available output. propriety=%s strict=%s",
+                    code_is_proper, code_is_strict,
+                )
+                logger.info("Format status → EXPERIMENTAL")
+
+        # ── CASE 2: LLM extracted, CODE returned nothing ──────────────────────
+        elif has_llm and not has_code:
+            final_parser_type    = "LLM"
+            new_statement_status = "EXPERIMENTAL"
+            logger.info("DECISION: LLM WINS — CODE returned 0 transactions")
+            logger.info("Format status → EXPERIMENTAL")
+
+        # ── CASE 1: Both extracted — score-based decision ─────────────────────
+        elif comparison_score >= 90 and code_passes_quality:
             final_parser_type    = "CODE"
             new_statement_status = "ACTIVE"
             logger.info("DECISION: CODE WINS (accuracy=%.2f%% ≥ 90%% & both quality gates pass)", comparison_score)
             logger.info("Format status → ACTIVE")
+
         else:
             final_parser_type    = "LLM"
             new_statement_status = "EXPERIMENTAL"

@@ -19,7 +19,7 @@ import itertools
 import functools
 import typing
 import logging
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 from datetime import datetime, date, timedelta
 
 logger = logging.getLogger("ledgerai.code_sandbox")
@@ -122,6 +122,7 @@ def execute_extraction_code(code: str, full_text: str) -> List[Dict]:
         "List": List,
         "Dict": Dict,
         "Optional": Optional,
+        "Any": Any,
     }
 
     exec(cleaned, namespace)

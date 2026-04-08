@@ -1,13 +1,125 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
-import { Check, Code, FileSearch, Building2, Cpu, Loader2, ChevronLeft, CheckCircle, Download, Link, ScrollText, Trash2 } from "lucide-react";
+import { Check, Code, FileSearch, Building2, Cpu, Loader2, ChevronLeft, CheckCircle, Download, Link, ScrollText, Trash2, Plus, RotateCcw, AlertCircle, Info } from "lucide-react";
 import API from "../api/api";
+import { useParsing } from "../context/ParsingContext";
+
+// Generic field editor for Date, Details, Balance
+const FieldEditor = ({ value, type, onSave, onCancel }) => {
+    const [val, setVal] = useState(value || '');
+    const [saving, setSaving] = useState(false);
+    const inputRef = useRef(null);
+
+    useEffect(() => { 
+        inputRef.current?.focus(); 
+        if (type !== 'textarea' && type !== 'date') inputRef.current?.select(); 
+    }, [type]);
+
+    const handleSave = async () => {
+        setSaving(true);
+        await onSave(type === 'number' ? parseFloat(val) || 0 : val);
+        setSaving(false);
+    };
+
+    const handleKey = (e) => {
+        if (e.key === 'Enter' && type !== 'textarea') handleSave();
+        if (e.key === 'Escape') onCancel();
+    };
+
+    return (
+        <div className="amount-editor" onClick={(e) => e.stopPropagation()}>
+            {type === 'textarea' ? (
+                <textarea
+                    ref={inputRef}
+                    className="amount-editor-input"
+                    value={val}
+                    onChange={(e) => setVal(e.target.value)}
+                    onKeyDown={handleKey}
+                    style={{ minHeight: '80px', resize: 'vertical', width: '220px' }}
+                />
+            ) : (
+                <input
+                    ref={inputRef}
+                    className="amount-editor-input"
+                    type={type === 'number' ? 'number' : type === 'date' ? 'date' : 'text'}
+                    step={type === 'number' ? '0.01' : undefined}
+                    value={val}
+                    onChange={(e) => setVal(e.target.value)}
+                    onKeyDown={handleKey}
+                    style={{ width: type === 'date' ? '150px' : '100%' }}
+                />
+            )}
+            <div className="amount-editor-actions">
+                <button className="amount-editor-save" onClick={handleSave} disabled={saving}>
+                    {saving ? '...' : '✓'}
+                </button>
+                <button className="amount-editor-cancel" onClick={onCancel}>✕</button>
+            </div>
+        </div>
+    );
+};
+
+// Specialized amount editor with Dr/Cr toggle
+const AmountEditor = ({ tx, onSave, onCancel }) => {
+    const isDebit = (tx.debit || 0) > 0;
+    const [editAmount, setEditAmount] = useState(isDebit ? tx.debit : tx.credit);
+    const [editType, setEditType] = useState(isDebit ? 'DEBIT' : 'CREDIT');
+    const [saving, setSaving] = useState(false);
+    const inputRef = useRef(null);
+
+    useEffect(() => { inputRef.current?.focus(); inputRef.current?.select(); }, []);
+
+    const handleSave = async () => {
+        const parsed = parseFloat(editAmount);
+        if (isNaN(parsed) || parsed < 0) return;
+        setSaving(true);
+        await onSave(parsed, editType);
+        setSaving(false);
+    };
+
+    const handleKey = (e) => {
+        if (e.key === 'Enter') handleSave();
+        if (e.key === 'Escape') onCancel();
+    };
+
+    return (
+        <div className="amount-editor" onClick={(e) => e.stopPropagation()}>
+            <div className="amount-editor-type-toggle">
+                <button
+                    className={`type-btn ${editType === 'DEBIT' ? 'active debit' : ''}`}
+                    onClick={() => setEditType('DEBIT')}
+                >− Dr</button>
+                <button
+                    className={`type-btn ${editType === 'CREDIT' ? 'active credit' : ''}`}
+                    onClick={() => setEditType('CREDIT')}
+                >+ Cr</button>
+            </div>
+            <input
+                ref={inputRef}
+                className="amount-editor-input"
+                type="number"
+                step="0.01"
+                min="0.01"
+                value={editAmount}
+                onChange={(e) => setEditAmount(e.target.value)}
+                onKeyDown={handleKey}
+            />
+            <div className="amount-editor-actions">
+                <button className="amount-editor-save" onClick={handleSave} disabled={saving}>
+                    {saving ? '...' : '✓'}
+                </button>
+                <button className="amount-editor-cancel" onClick={onCancel}>✕</button>
+            </div>
+        </div>
+    );
+};
 
 export default function ReviewPage() {
     const [searchParams] = useSearchParams();
     const documentId = searchParams.get("id");
     const navigate = useNavigate();
+    const { retryExtraction } = useParsing();
 
     const [data, setData] = useState(null);
     const [isLoading, setIsLoading] = useState(true);
@@ -23,11 +135,15 @@ export default function ReviewPage() {
     const [editableCodeTxns, setEditableCodeTxns] = useState([]);
     const [editableLlmTxns, setEditableLlmTxns] = useState([]);
     const [selectedIndices, setSelectedIndices] = useState({ CODE: [], LLM: [] });
-    const [activeParser, setActiveParser] = useState("CODE"); // Default selection
+    const [activeParser, setActiveParser] = useState("CODE"); 
+    const [editingCell, setEditingCell] = useState(null); // { parser, index, field }
+    const [isRetryModalOpen, setIsRetryModalOpen] = useState(false);
+    const [retryMethod, setRetryMethod] = useState("CODE"); // CODE, VISION, MANUAL
+    const [retryNote, setRetryNote] = useState("");
+    const [isRetrying, setIsRetrying] = useState(false);
 
     useEffect(() => {
         if (!documentId) {
-            setError("No document ID provided.");
             setIsLoading(false);
             return;
         }
@@ -36,24 +152,15 @@ export default function ReviewPage() {
             try {
                 const res = await API.get(`/documents/${documentId}/review`);
                 setData(res.data);
-                
-                // Initialize editable transactions
                 setEditableCodeTxns(res.data.code_transactions || []);
                 setEditableLlmTxns(res.data.llm_transactions || []);
-                
-                // Set active parser based on backend recommendation
                 const preferred = res.data.transaction_parsed_type || "CODE";
                 setActiveParser(preferred);
-                
-                // Initialize selected indices (all by default)
                 setSelectedIndices({
                     CODE: (res.data.code_transactions || []).map((_, i) => i),
                     LLM: (res.data.llm_transactions || []).map((_, i) => i)
                 });
-
-                if (res.data.user_accounts) {
-                    setUserAccounts(res.data.user_accounts);
-                }
+                if (res.data.user_accounts) setUserAccounts(res.data.user_accounts);
                 if (res.data.selected_account_id) {
                     setSelectedAccountId(res.data.selected_account_id);
                     setAccountLinked(true);
@@ -64,7 +171,7 @@ export default function ReviewPage() {
                 }
             } catch (err) {
                 console.error(err);
-                setError("Failed to fetch review data. Ensure the document has been processed.");
+                setError("Failed to fetch review data.");
             } finally {
                 setIsLoading(false);
             }
@@ -73,27 +180,14 @@ export default function ReviewPage() {
     }, [documentId]);
 
     const handleApprove = async () => {
-        if (!accountLinked) {
-            alert("Please link an account before approving.");
-            return;
-        }
-
+        if (!accountLinked) { alert("Please link an account before approving."); return; }
         const txnsToUse = activeParser === "CODE" ? editableCodeTxns : editableLlmTxns;
         const currentIndices = selectedIndices[activeParser];
-        
-        if (currentIndices.length === 0) {
-            alert("Please select at least one transaction to approve.");
-            return;
-        }
-
+        if (currentIndices.length === 0) { alert("Please select at least one transaction to approve."); return; }
         const selectedTxns = currentIndices.map(i => txnsToUse[i]);
-
         setIsApproving(true);
         try {
-            await API.post(`/documents/${documentId}/approve`, {
-                transactions: selectedTxns,
-                parser_type: activeParser
-            });
+            await API.post(`/documents/${documentId}/approve`, { transactions: selectedTxns, parser_type: activeParser });
             setIsApproved(true);
         } catch (err) {
             console.error(err);
@@ -107,15 +201,35 @@ export default function ReviewPage() {
         if (!selectedAccountId) return;
         setIsLinkingAccount(true);
         try {
-            await API.post(`/documents/${documentId}/select-account`, {
-                account_id: selectedAccountId,
-            });
+            await API.post(`/documents/${documentId}/select-account`, { account_id: selectedAccountId });
             setAccountLinked(true);
         } catch (err) {
             console.error(err);
             alert("Failed to link account: " + (err.response?.data?.detail || err.message));
         } finally {
             setIsLinkingAccount(false);
+        }
+    };
+
+    const handleRetryExtraction = async () => {
+        setIsRetrying(true);
+        try {
+            await API.post(`/documents/${documentId}/retry`, {
+                method: retryMethod,
+                note: retryNote
+            });
+            
+            // Trigger progress overlay in context
+            retryExtraction(documentId, data?.file_name || "Document");
+
+            // Redirect to dashboard where the progress indicator is
+            navigate("/parsing");
+        } catch (err) {
+            console.error(err);
+            alert("Retry failed: " + (err.response?.data?.detail || err.message));
+        } finally {
+            setIsRetrying(false);
+            setIsRetryModalOpen(false);
         }
     };
 
@@ -128,16 +242,37 @@ export default function ReviewPage() {
         });
     };
 
+    const handleAmountSave = (parserType, index, amount, type) => {
+        const updater = parserType === "CODE" ? setEditableCodeTxns : setEditableLlmTxns;
+        updater(prev => {
+            const next = [...prev];
+            next[index] = {
+                ...next[index],
+                debit: type === 'DEBIT' ? amount : 0,
+                credit: type === 'CREDIT' ? amount : 0
+            };
+            return next;
+        });
+        setEditingCell(null);
+    };
+
     const toggleSelection = (parserType, index) => {
         setSelectedIndices(prev => {
             const current = [...prev[parserType]];
             const foundIdx = current.indexOf(index);
-            if (foundIdx > -1) {
-                current.splice(foundIdx, 1);
-            } else {
-                current.push(index);
-            }
+            if (foundIdx > -1) current.splice(foundIdx, 1);
+            else current.push(index);
             return { ...prev, [parserType]: current };
+        });
+    };
+
+    const handleAddTxn = (parserType) => {
+        const updater = parserType === "CODE" ? setEditableCodeTxns : setEditableLlmTxns;
+        const newTxn = { date: new Date().toISOString().split('T')[0], details: "Manual Entry", debit: 0, credit: 0, balance: 0, confidence: 1.0 };
+        updater(prev => {
+            const next = [...prev, newTxn];
+            setSelectedIndices(prevIndices => ({ ...prevIndices, [parserType]: [...prevIndices[parserType], next.length - 1] }));
+            return next;
         });
     };
 
@@ -145,10 +280,7 @@ export default function ReviewPage() {
         const txns = parserType === "CODE" ? editableCodeTxns : editableLlmTxns;
         setSelectedIndices(prev => {
             const isAllSelected = prev[parserType].length === txns.length;
-            return {
-                ...prev,
-                [parserType]: isAllSelected ? [] : txns.map((_, i) => i)
-            };
+            return { ...prev, [parserType]: isAllSelected ? [] : txns.map((_, i) => i) };
         });
     };
 
@@ -157,15 +289,8 @@ export default function ReviewPage() {
             const txnsToUse = activeParser === "CODE" ? editableCodeTxns : editableLlmTxns;
             const currentIndices = selectedIndices[activeParser];
             const selectedTxns = currentIndices.map(i => txnsToUse[i]);
-
-            // Resolve identifier: use the linked account's number digits, fallback to document_id
             const linkedAccount = userAccounts.find(a => a.account_id === selectedAccountId);
-            const accountNumber =
-                linkedAccount?.account_number ||
-                linkedAccount?.account_number_last4 ||
-                linkedAccount?.card_last4 ||
-                String(documentId);
-
+            const accountNumber = linkedAccount?.account_number || linkedAccount?.account_number_last4 || linkedAccount?.card_last4 || String(documentId);
             const normalizedTransactions = selectedTxns.map(tx => ({
                 txn_date:   tx.txn_date  ?? tx.date        ?? null,
                 debit:      tx.debit     != null ? tx.debit  : 0,
@@ -174,91 +299,41 @@ export default function ReviewPage() {
                 details:    tx.details   || tx.description  || "",
                 confidence: tx.confidence ?? null,
             }));
-
             const output = {
-                file_name:    data?.file_name || `${(data?.bank_name || "bank").replace(/\s+/g, "_").toLowerCase()}_primary_ml.pdf`,
-                identifiers:  [String(accountNumber)],
+                file_name: data?.file_name || `${(data?.bank_name || "bank").replace(/\s+/g, "_").toLowerCase()}_primary_ml.pdf`,
+                identifiers: [String(accountNumber)],
                 transactions: normalizedTransactions,
             };
-
             const jsonStr = JSON.stringify(output, null, 2);
             const blob = new Blob([jsonStr], { type: "application/json" });
             const url = URL.createObjectURL(blob);
             const a = document.createElement("a");
             a.href = url;
-            const safeName = (data?.bank_name || "transactions").replace(/\s+/g, "_");
-            a.download = `${safeName}_transactions.json`;
+            a.download = `${(data?.bank_name || "transactions").replace(/\s+/g, "_")}_transactions.json`;
             a.click();
             URL.revokeObjectURL(url);
         } catch (err) {
             console.error(err);
-            alert("Download failed: " + (err.response?.data?.detail || err.message));
+            alert("Download failed.");
         }
     };
 
-    if (isLoading) {
-        return (
+    if (isLoading) return (
             <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '60vh' }}>
                 <Loader2 className="spin-icon" size={48} color="var(--primary-action)" />
             </div>
         );
-    }
 
-    if (error || !data) {
-        return (
-            <div style={{ 
-                display: 'flex', 
-                flexDirection: 'column', 
-                alignItems: 'center', 
-                justifyContent: 'center', 
-                height: '70vh',
-                textAlign: 'center',
-                padding: '2rem'
-            }}>
-                <div style={{
-                    width: '80px',
-                    height: '80px',
-                    borderRadius: '24px',
-                    background: 'rgba(72, 62, 168, 0.05)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    marginBottom: '1.5rem',
-                    color: 'var(--primary-action)'
-                }}>
+    if (error || !data || !documentId) return (
+            <div id="review-empty-state" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '70vh', textAlign: 'center', padding: '2rem' }}>
+                <div style={{ width: '80px', height: '80px', borderRadius: '24px', background: 'rgba(72, 62, 168, 0.05)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '1.5rem', color: 'var(--primary-action)' }}>
                     <FileSearch size={40} />
                 </div>
-                
-                <h2 style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '0.5rem' }}>
-                    No Document Selected
-                </h2>
-                
-                <p style={{ fontSize: '0.95rem', color: 'var(--text-secondary)', maxWidth: '400px', lineHeight: 1.6, marginBottom: '2rem' }}>
-                    Transaction data will appear here once you've started processing a statement from the dashboard and it's ready for your review.
-                </p>
-
-                <button 
-                    onClick={() => navigate("/parsing")} 
-                    style={{
-                        padding: '0.8rem 2.5rem',
-                        background: 'var(--primary-action)',
-                        color: 'white',
-                        border: 'none',
-                        borderRadius: '12px',
-                        fontWeight: 700,
-                        fontSize: '0.9rem',
-                        cursor: 'pointer',
-                        boxShadow: '0 4px 12px rgba(72, 62, 168, 0.2)',
-                        transition: 'all 0.2s'
-                    }}
-                    onMouseOver={(e) => e.currentTarget.style.transform = 'translateY(-2px)'}
-                    onMouseOut={(e) => e.currentTarget.style.transform = 'translateY(0)'}
-                >
-                    Return to Dashboard
-                </button>
+                <h2 id="review-title" style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '0.5rem' }}>No Document Selected</h2>
+                <p style={{ fontSize: '0.95rem', color: 'var(--text-secondary)', maxWidth: '400px', lineHeight: 1.6, marginBottom: '2rem' }}>Transaction data will appear here once you've started processing a statement.</p>
+                <button onClick={() => navigate("/parsing")} style={{ padding: '0.8rem 2.5rem', background: 'var(--primary-action)', color: 'white', border: 'none', borderRadius: '12px', fontWeight: 700, fontSize: '0.9rem', cursor: 'pointer' }}>Return to Dashboard</button>
             </div>
         );
-    }
 
     const renderTransactionTable = (transactions, title, icon, parserType) => {
         const isActive = activeParser === parserType;
@@ -306,101 +381,135 @@ export default function ReviewPage() {
                     </div>
                 </div>
 
-                <div style={{ overflowX: 'auto' }}>
+                <div id="review-table" style={{ overflowX: 'auto' }}>
                     <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                         <thead>
                             <tr style={{ background: 'var(--bg-secondary)' }}>
                                 <th style={{ width: '40px', padding: '1rem', textAlign: 'center' }}>
-                                    <input 
-                                        type="checkbox" 
-                                        checked={isAllSelected} 
-                                        onChange={() => !isApproved && toggleSelectAll(parserType)}
-                                        disabled={isApproved}
-                                    />
+                                    <input type="checkbox" checked={isAllSelected} onChange={() => !isApproved && toggleSelectAll(parserType)} disabled={isApproved} />
                                 </th>
                                 <th style={{ padding: '1rem', textAlign: 'left', fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', width: '130px' }}>Date</th>
                                 <th style={{ padding: '1rem', textAlign: 'left', fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Details</th>
-                                <th style={{ padding: '1rem', textAlign: 'right', fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Debit</th>
-                                <th style={{ padding: '1rem', textAlign: 'right', fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Credit</th>
-                                <th style={{ padding: '1rem', textAlign: 'right', fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Balance</th>
+                                <th style={{ padding: '1rem', textAlign: 'right', fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', width: '120px' }}>Debit</th>
+                                <th style={{ padding: '1rem', textAlign: 'right', fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', width: '120px' }}>Credit</th>
+                                <th style={{ padding: '1rem', textAlign: 'right', fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', width: '130px' }}>Balance</th>
                                 <th style={{ padding: '1rem', textAlign: 'center', fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', width: '100px' }}>Confidence</th>
                             </tr>
                         </thead>
                         <tbody>
                             {transactions && transactions.length > 0 ? transactions.map((tx, i) => {
                                 const isSelected = currentSelected.includes(i);
+                                const isDebit = (tx.debit || 0) > 0;
+                                const amount = isDebit ? tx.debit : tx.credit;
+
                                 return (
-                                    <tr key={i} style={{ 
-                                        borderTop: '1px solid var(--border-color)',
-                                        background: isSelected ? 'rgba(72, 62, 168, 0.02)' : 'transparent'
-                                    }}>
+                                    <tr key={i} style={{ borderTop: '1px solid var(--border-color)', background: isSelected ? 'rgba(72, 62, 168, 0.02)' : 'transparent' }}>
                                         <td style={{ textAlign: 'center', padding: '0.5rem' }}>
-                                            <input 
-                                                type="checkbox" 
-                                                checked={isSelected} 
-                                                onChange={() => !isApproved && toggleSelection(parserType, i)}
-                                                disabled={isApproved}
-                                            />
+                                            <input type="checkbox" checked={isSelected} onChange={() => !isApproved && toggleSelection(parserType, i)} disabled={isApproved} />
                                         </td>
-                                        <td style={{ padding: '0.5rem' }}>
-                                            <input 
-                                                className="table-input"
-                                                value={tx.date || tx.txn_date || ''} 
-                                                onChange={(e) => handleUpdateTxn(parserType, i, 'date', e.target.value)}
-                                                disabled={isApproved}
-                                                style={{ width: '120px' }}
-                                            />
+                                        
+                                        {/* Date Field */}
+                                        <td style={{ padding: '0.5rem', position: 'relative' }}>
+                                            {editingCell?.parser === parserType && editingCell?.index === i && editingCell?.field === 'date' ? (
+                                                <FieldEditor 
+                                                    value={tx.date || tx.txn_date || ''}
+                                                    type="date"
+                                                    onSave={(val) => { handleUpdateTxn(parserType, i, 'date', val); setEditingCell(null); }}
+                                                    onCancel={() => setEditingCell(null)}
+                                                />
+                                            ) : (
+                                                <div 
+                                                    className="amount-cell-review"
+                                                    onClick={() => !isApproved && setEditingCell({ parser: parserType, index: i, field: 'date' })}
+                                                    style={{ cursor: isApproved ? 'default' : 'pointer', width: '120px' }}
+                                                >
+                                                    {tx.date || tx.txn_date || ''}
+                                                    {!isApproved && <span className="amount-edit-hint">✎</span>}
+                                                </div>
+                                            )}
                                         </td>
-                                        <td style={{ padding: '0.5rem' }}>
-                                            <textarea 
-                                                className="table-input"
-                                                value={tx.details || tx.description || ''} 
-                                                onChange={(e) => handleUpdateTxn(parserType, i, 'details', e.target.value)}
-                                                disabled={isApproved}
-                                                style={{ width: '100%', minHeight: '32px', resize: 'vertical' }}
-                                            />
+
+                                        {/* Details Field */}
+                                        <td style={{ padding: '0.5rem', position: 'relative' }}>
+                                            {editingCell?.parser === parserType && editingCell?.index === i && editingCell?.field === 'details' ? (
+                                                <FieldEditor 
+                                                    value={tx.details || tx.description || ''}
+                                                    type="textarea"
+                                                    onSave={(val) => { handleUpdateTxn(parserType, i, 'details', val); setEditingCell(null); }}
+                                                    onCancel={() => setEditingCell(null)}
+                                                />
+                                            ) : (
+                                                <div 
+                                                    className="amount-cell-review"
+                                                    onClick={() => !isApproved && setEditingCell({ parser: parserType, index: i, field: 'details' })}
+                                                    style={{ cursor: isApproved ? 'default' : 'pointer', minWidth: '200px' }}
+                                                >
+                                                    {tx.details || tx.description || ''}
+                                                    {!isApproved && <span className="amount-edit-hint">✎</span>}
+                                                </div>
+                                            )}
                                         </td>
-                                        <td style={{ padding: '0.5rem', textAlign: 'right' }}>
-                                            <input 
-                                                className="table-input text-right"
-                                                type="number"
-                                                step="0.01"
-                                                value={tx.debit || ''} 
-                                                onChange={(e) => handleUpdateTxn(parserType, i, 'debit', parseFloat(e.target.value) || 0)}
-                                                disabled={isApproved}
-                                                style={{ width: '80px', color: tx.debit ? '#F87171' : 'inherit' }}
-                                            />
+
+                                        {/* Separate Debit and Credit Cells for perfect alignment */}
+                                        {editingCell?.parser === parserType && editingCell?.index === i && editingCell?.field === 'amount' ? (
+                                            <td colSpan="2" style={{ padding: '0.5rem 1rem', position: 'relative' }}>
+                                                <AmountEditor 
+                                                    tx={tx} 
+                                                    onSave={(amt, type) => handleAmountSave(parserType, i, amt, type)} 
+                                                    onCancel={() => setEditingCell(null)} 
+                                                />
+                                            </td>
+                                        ) : (
+                                            <>
+                                                {/* Debit Cell */}
+                                                <td 
+                                                    style={{ padding: '0.5rem 1rem', textAlign: 'right', width: '120px', position: 'relative' }}
+                                                    onClick={() => !isApproved && setEditingCell({ parser: parserType, index: i, field: 'amount' })}
+                                                >
+                                                    <div className="amount-cell-review" style={{ cursor: isApproved ? 'default' : 'pointer', justifyContent: 'flex-end', width: '100%' }}>
+                                                        <span style={{ color: isDebit ? '#F87171' : '#e2e8f0', fontWeight: 600 }}>{isDebit ? `- ₹${amount}` : '--'}</span>
+                                                        {!isApproved && <span className="amount-edit-hint">✎</span>}
+                                                    </div>
+                                                </td>
+                                                {/* Credit Cell */}
+                                                <td 
+                                                    style={{ padding: '0.5rem 1rem', textAlign: 'right', width: '120px', position: 'relative' }}
+                                                    onClick={() => !isApproved && setEditingCell({ parser: parserType, index: i, field: 'amount' })}
+                                                >
+                                                    <div className="amount-cell-review" style={{ cursor: isApproved ? 'default' : 'pointer', justifyContent: 'flex-end', width: '100%' }}>
+                                                        <span style={{ color: !isDebit && amount > 0 ? '#34D399' : '#e2e8f0', fontWeight: 600 }}>{!isDebit && amount > 0 ? `+ ₹${amount}` : '--'}</span>
+                                                        {!isApproved && <span className="amount-edit-hint">✎</span>}
+                                                    </div>
+                                                </td>
+                                            </>
+                                        )}
+
+                                        {/* Balance Field */}
+                                        <td style={{ padding: '0.5rem', position: 'relative', textAlign: 'right' }}>
+                                            {editingCell?.parser === parserType && editingCell?.index === i && editingCell?.field === 'balance' ? (
+                                                <FieldEditor 
+                                                    value={tx.balance || ''}
+                                                    type="number"
+                                                    onSave={(val) => { handleUpdateTxn(parserType, i, 'balance', val); setEditingCell(null); }}
+                                                    onCancel={() => setEditingCell(null)}
+                                                />
+                                            ) : (
+                                                <div 
+                                                    className="amount-cell-review"
+                                                    onClick={() => !isApproved && setEditingCell({ parser: parserType, index: i, field: 'balance' })}
+                                                    style={{ cursor: isApproved ? 'default' : 'pointer', fontWeight: 600, width: '90px', marginLeft: 'auto' }}
+                                                >
+                                                    ₹{tx.balance || '0'}
+                                                    {!isApproved && <span className="amount-edit-hint">✎</span>}
+                                                </div>
+                                            )}
                                         </td>
-                                        <td style={{ padding: '0.5rem', textAlign: 'right' }}>
-                                            <input 
-                                                className="table-input text-right"
-                                                type="number"
-                                                step="0.01"
-                                                value={tx.credit || ''} 
-                                                onChange={(e) => handleUpdateTxn(parserType, i, 'credit', parseFloat(e.target.value) || 0)}
-                                                disabled={isApproved}
-                                                style={{ width: '80px', color: tx.credit ? '#34D399' : 'inherit' }}
-                                            />
-                                        </td>
-                                        <td style={{ padding: '0.5rem', textAlign: 'right' }}>
-                                            <input 
-                                                className="table-input text-right"
-                                                type="number"
-                                                step="0.01"
-                                                value={tx.balance || ''} 
-                                                onChange={(e) => handleUpdateTxn(parserType, i, 'balance', parseFloat(e.target.value) || 0)}
-                                                disabled={isApproved}
-                                                style={{ width: '90px', fontWeight: 600 }}
-                                            />
-                                        </td>
+
                                         <td style={{ padding: '0.5rem', textAlign: 'center' }}>
-                                            <span style={{
+                                            <span style={{ 
                                                 background: tx.confidence >= 0.9 ? '#def7ec' : tx.confidence >= 0.7 ? '#fef3c7' : '#fde8e8',
                                                 color: tx.confidence >= 0.9 ? '#03543f' : tx.confidence >= 0.7 ? '#92400e' : '#9b1c1c',
-                                                padding: '2px 6px',
-                                                borderRadius: '50px',
-                                                fontSize: '0.65rem',
-                                                fontWeight: 700,
+                                                padding: '2px 6px', borderRadius: '50px', fontSize: '0.65rem', fontWeight: 700 
                                             }}>
                                                 {tx.confidence != null ? (tx.confidence * 100).toFixed(0) + '%' : 'N/A'}
                                             </span>
@@ -413,31 +522,39 @@ export default function ReviewPage() {
                         </tbody>
                     </table>
                 </div>
+
+                {!isApproved && (
+                    <div style={{ padding: '1rem', borderTop: '1px solid var(--border-color)', display: 'flex', justifyContent: 'center', background: isActive ? 'rgba(72, 62, 168, 0.02)' : 'transparent' }}>
+                        <button id={`review-add-txn-${parserType}`} onClick={() => handleAddTxn(parserType)} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '0.5rem 1.25rem', background: 'none', border: '1.5px dashed var(--primary-action)', borderRadius: '8px', color: 'var(--primary-action)', fontSize: '0.85rem', fontWeight: 700, cursor: 'pointer' }}>
+                            <Plus size={16} /> Add Missing Transaction
+                        </button>
+                    </div>
+                )}
+                
                 <style dangerouslySetInnerHTML={{ __html: `
-                    .table-input {
-                        background: transparent;
-                        border: 1px solid transparent;
-                        border-radius: 4px;
-                        padding: 4px 8px;
-                        font-family: inherit;
-                        font-size: 0.85rem;
-                        color: var(--text-primary);
-                        transition: all 0.2s;
-                    }
-                    .table-input:hover:not(:disabled) {
-                        border-color: var(--border-color);
-                        background: var(--bg-secondary);
-                    }
-                    .table-input:focus:not(:disabled) {
-                        border-color: var(--primary-action);
-                        background: var(--bg-primary);
-                        outline: none;
-                        box-shadow: 0 0 0 2px rgba(72, 62, 168, 0.1);
-                    }
-                    .table-input:disabled {
-                        cursor: default;
-                    }
-                    .text-right { text-align: right; }
+                    .table-input { background: transparent; border: 1px solid transparent; border-radius: 4px; padding: 4px 8px; font-family: inherit; font-size: 0.85rem; color: var(--text-primary); transition: all 0.2s; }
+                    .table-input:hover:not(:disabled) { border-color: var(--border-color); background: var(--bg-secondary); }
+                    .table-input:focus:not(:disabled) { border-color: var(--primary-action); background: var(--bg-primary); outline: none; box-shadow: 0 0 0 2px rgba(72, 62, 168, 0.1); }
+                    
+                    .amount-cell-review { position: relative; border-radius: 6px; padding: 4px 8px; transition: background 0.15s; user-select: none; min-height: 32px; display: flex; align-items: center; }
+                    .amount-cell-review:hover:not(:disabled) { background: rgba(255, 255, 255, 0.04); }
+                    
+                    .amount-edit-hint { position: absolute; top: -2px; right: -2px; font-size: 11px; opacity: 0; color: var(--text-secondary); transition: opacity 0.15s; }
+                    .amount-cell-review:hover .amount-edit-hint { opacity: 1; }
+                    
+                    .amount-editor { display: flex; flex-direction: column; gap: 6px; background: var(--bg-primary, #1a1a2e); border: 1px solid var(--glass-border); border-radius: 10px; padding: 8px 10px; min-width: 140px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); text-align: left; z-index: 100; position: absolute; top: 100%; right: 0; }
+                    .amount-editor-type-toggle { display: flex; border-radius: 6px; overflow: hidden; border: 1px solid var(--glass-border); margin-bottom: 4px; }
+                    .type-btn { flex: 1; padding: 4px 8px; font-size: 11px; font-weight: 700; border: none; background: transparent; color: var(--text-secondary); cursor: pointer; transition: all 0.15s; }
+                    .type-btn.active.debit { background: rgba(248, 113, 113, 0.15); color: #F87171; }
+                    .type-btn.active.credit { background: rgba(52, 211, 153, 0.15); color: #34D399; }
+                    .amount-editor-input { width: 100%; background: rgba(255, 255, 255, 0.05); border: 1px solid var(--glass-border); border-radius: 6px; padding: 6px; font-size: 13px; font-weight: 600; color: var(--text-primary); margin-bottom: 6px; outline: none; }
+                    .amount-editor-input:focus { border-color: var(--accent-color); }
+                    .amount-editor-actions { display: flex; gap: 6px; }
+                    .amount-editor-save, .amount-editor-cancel { flex: 1; padding: 5px 0; border-radius: 6px; font-size: 13px; font-weight: 700; border: 1px solid var(--glass-border); cursor: pointer; transition: all 0.15s; }
+                    .amount-editor-save { background: rgba(52, 211, 153, 0.15); color: #34D399; border-color: rgba(52, 211, 153, 0.3); }
+                    .amount-editor-save:hover:not(:disabled) { background: rgba(52, 211, 153, 0.25); }
+                    .amount-editor-cancel { background: transparent; color: var(--text-secondary); }
+                    .amount-editor-cancel:hover { background: rgba(255, 255, 255, 0.05); color: var(--text-primary); }
                 `}} />
             </div>
         );
@@ -469,10 +586,10 @@ export default function ReviewPage() {
                     >
                         <ChevronLeft size={16} /> Back to Dashboard
                     </button>
-                    <h2 style={{ fontSize: '1.75rem', fontWeight: 800, color: 'var(--text-primary)', margin: 0 }}>Review & Approve</h2>
+                    <h2 id="review-title" style={{ fontSize: '1.75rem', fontWeight: 800, color: 'var(--text-primary)', margin: 0 }}>Review & Approve</h2>
                 </div>
                 
-                <div style={{ display: 'flex', gap: '0.75rem' }}>
+                <div id="review-header-actions" style={{ display: 'flex', gap: '0.75rem' }}>
                     <button
                         onClick={handleDownloadJson}
                         style={{
@@ -493,6 +610,28 @@ export default function ReviewPage() {
                         <Download size={15} /> Export Selected
                     </button>
 
+                    {!isApproved && (
+                        <button
+                            onClick={() => setIsRetryModalOpen(true)}
+                            style={{
+                                padding: '0.6rem 1.5rem',
+                                background: 'none',
+                                color: '#f39c12',
+                                border: '2px solid #f39c12',
+                                borderRadius: '10px',
+                                fontWeight: 700,
+                                fontSize: '0.85rem',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '8px',
+                                cursor: 'pointer',
+                                transition: 'all 0.2s'
+                            }}
+                        >
+                            <RotateCcw size={15} /> Retry extraction <span style={{ background: '#f39c12', color: 'white', padding: '1px 6px', borderRadius: '10px', fontSize: '10px' }}>new</span>
+                        </button>
+                    )}
+
                     {isApproved ? (
                         <div style={{
                             padding: '0.6rem 2rem',
@@ -510,6 +649,7 @@ export default function ReviewPage() {
                         </div>
                     ) : (
                         <button
+                            id="review-approve-btn"
                             onClick={handleApprove}
                             disabled={isApproving || !accountLinked}
                             style={{
@@ -538,6 +678,26 @@ export default function ReviewPage() {
                 </div>
             </div>
 
+            {/* Retry Info Callout */}
+            {!isApproved && (
+                <div style={{
+                    background: 'rgba(243, 156, 18, 0.08)',
+                    border: '1px solid rgba(243, 156, 18, 0.3)',
+                    borderRadius: '12px',
+                    padding: '0.75rem 1.25rem',
+                    marginBottom: '1.5rem',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.75rem',
+                    color: '#92400e',
+                    fontSize: '0.85rem',
+                    fontWeight: 500
+                }}>
+                    <Info size={18} />
+                    <span>Extracted <b>{activeParser === "CODE" ? editableCodeTxns.length : editableLlmTxns.length} rows</b> — if results look incomplete or wrong, use <b>Retry extraction</b> to re-run with a different method.</span>
+                </div>
+            )}
+
             {/* Metadata bar */}
             <div style={{
                 background: 'var(--card-bg)',
@@ -557,7 +717,7 @@ export default function ReviewPage() {
                     <span style={{ fontWeight: 800, fontSize: '1rem', color: 'var(--text-primary)' }}>{data.bank_name}</span>
                 </div>
 
-                <div style={{ flex: 1, minWidth: '300px' }}>
+                <div id="review-link-account" style={{ flex: 1, minWidth: '300px' }}>
                     <label style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '4px', marginBottom: '8px', textTransform: 'uppercase' }}>
                         <Link size={12} /> Target Account for Transactions
                     </label>
@@ -590,6 +750,7 @@ export default function ReviewPage() {
                         </select>
                         {!accountLinked && (
                             <button
+                                id="review-link-btn"
                                 onClick={handleLinkAccount}
                                 disabled={!selectedAccountId || isLinkingAccount || isApproved}
                                 style={{
@@ -616,7 +777,7 @@ export default function ReviewPage() {
             </div>
 
             <div style={{ display: 'flex', gap: '1.5rem', alignItems: 'flex-start' }}>
-                <div style={{ flex: 3, display: 'flex', flexDirection: 'column', gap: '1rem', minWidth: 0 }}>
+                <div id="review-tables" style={{ flex: 3, display: 'flex', flexDirection: 'column', gap: '1rem', minWidth: 0 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '0.5rem' }}>
                         <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Step 1: Choose extraction source & Edit if needed</div>
                     </div>
@@ -680,6 +841,122 @@ export default function ReviewPage() {
                     </div>
                 </div>
             </div>
+
+            {/* Retry Extraction Modal */}
+            {isRetryModalOpen && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(10px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 11000 }}>
+                    <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} style={{ background: 'var(--bg-secondary)', padding: '2.5rem', borderRadius: '24px', border: '1px solid var(--glass-border)', maxWidth: '500px', width: '90%', boxShadow: '0 25px 60px -12px rgba(0,0,0,0.4)', color: 'var(--text-primary)' }}>
+                        <h3 style={{ fontSize: '1.25rem', fontWeight: 800, marginBottom: '0.75rem' }}>Retry extraction</h3>
+                        <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', marginBottom: '2rem', lineHeight: 1.6 }}>
+                            Choose a different extraction method or add a note to help the parser.
+                        </p>
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '2rem' }}>
+                            <label style={{ fontSize: '0.85rem', fontWeight: 700, marginBottom: '4px' }}>Extraction method</label>
+                            
+                            {[
+                                { id: 'CODE', label: 'Code-based (current)', sub: 'Fastest extraction method' },
+                                { id: 'VISION', label: 'AI vision extraction', sub: 'Better for scanned or image-based PDFs', recommended: true },
+                                { id: 'MANUAL', label: 'Manual entry', sub: 'Set status to review and add manually' }
+                            ].map(method => (
+                                <div 
+                                    key={method.id}
+                                    onClick={() => setRetryMethod(method.id)}
+                                    style={{ 
+                                        padding: '1rem', 
+                                        borderRadius: '12px', 
+                                        border: `2px solid ${retryMethod === method.id ? 'var(--primary-action)' : 'var(--border-color)'}`,
+                                        background: retryMethod === method.id ? 'rgba(72, 62, 168, 0.05)' : 'var(--bg-primary)',
+                                        cursor: 'pointer',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '12px',
+                                        transition: 'all 0.2s'
+                                    }}
+                                >
+                                    <div style={{ 
+                                        width: '20px', height: '20px', borderRadius: '50%', 
+                                        border: `2px solid ${retryMethod === method.id ? 'var(--primary-action)' : 'var(--border-color)'}`,
+                                        display: 'flex', alignItems: 'center', justifyContent: 'center'
+                                    }}>
+                                        {retryMethod === method.id && <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: 'var(--primary-action)' }} />}
+                                    </div>
+                                    <div style={{ flex: 1 }}>
+                                        <div style={{ fontWeight: 700, fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                            {method.label}
+                                            {method.recommended && <span style={{ background: 'rgba(72, 62, 168, 0.1)', color: 'var(--primary-action)', fontSize: '0.65rem', padding: '2px 8px', borderRadius: '20px' }}>Recommended</span>}
+                                        </div>
+                                        <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{method.sub}</div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+
+                        {data?.logic_version >= 3 && (
+                            <div style={{ 
+                                padding: '1rem', 
+                                background: 'rgba(231, 76, 60, 0.08)', 
+                                border: '1px solid rgba(231, 76, 60, 0.2)', 
+                                borderRadius: '12px', 
+                                marginBottom: '2rem', 
+                                display: 'flex', 
+                                gap: '12px' 
+                            }}>
+                                <AlertCircle size={20} color="#e74c3c" style={{ flexShrink: 0 }} />
+                                <div style={{ fontSize: '0.8rem', color: '#e74c3c', lineHeight: 1.5, fontWeight: 500 }}>
+                                    <b>AI reaches its limit:</b> This format has been refined {data.logic_version} times. Artificial Intelligence is struggling to fix this structure. We recommend using <b>AI Vision</b> or manually editing the transactions.
+                                </div>
+                            </div>
+                        )}
+
+                        <div style={{ marginBottom: '2rem' }}>
+                            <label style={{ fontSize: '0.85rem', fontWeight: 700, display: 'block', marginBottom: '8px' }}>Reason / note <span style={{ fontWeight: 500, opacity: 0.6 }}>(optional)</span></label>
+                            <textarea 
+                                value={retryNote}
+                                onChange={(e) => setRetryNote(e.target.value)}
+                                placeholder="e.g. Transactions are missing from page 3 onwards..."
+                                style={{ 
+                                    width: '100%', minHeight: '100px', padding: '0.875rem', 
+                                    borderRadius: '12px', background: 'var(--bg-primary)', 
+                                    border: '1px solid var(--border-color)', color: 'var(--text-primary)',
+                                    resize: 'vertical', fontSize: '0.9rem', outline: 'none'
+                                }}
+                            />
+                        </div>
+
+                        <div style={{ display: 'flex', gap: '1rem' }}>
+                            <button 
+                                onClick={() => setIsRetryModalOpen(false)} 
+                                disabled={isRetrying}
+                                style={{ flex: 1, padding: '0.875rem', borderRadius: '12px', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', fontWeight: 700, cursor: isRetrying ? 'not-allowed' : 'pointer', color: 'var(--text-secondary)' }}
+                            >
+                                Cancel
+                            </button>
+                            <button 
+                                onClick={handleRetryExtraction} 
+                                disabled={isRetrying}
+                                style={{ 
+                                    flex: 1.5, 
+                                    padding: '0.875rem', 
+                                    borderRadius: '12px', 
+                                    border: 'none', 
+                                    background: 'var(--primary-action)', 
+                                    color: 'white', 
+                                    fontWeight: 700, 
+                                    cursor: isRetrying ? 'not-allowed' : 'pointer',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    gap: '8px'
+                                }}
+                            >
+                                {isRetrying ? <Loader2 size={18} className="spin-icon" /> : <RotateCcw size={18} />}
+                                START RETRY
+                            </button>
+                        </div>
+                    </motion.div>
+                </div>
+            )}
         </motion.div>
     );
 }
