@@ -343,11 +343,32 @@ export default function ParsingPage() {
                         {error && <div style={{ marginTop: '1rem', color: '#e74c3c', fontSize: '0.8rem', fontWeight: 600 }}>{error}</div>}
 
                         <button 
-                            disabled={!file || (needsPassword && !password)} 
+                            disabled={!file || status === "DETECTING" || (needsPassword && !password)} 
                             onClick={handleUpload}
-                            style={{ width: '100%', height: '52px', marginTop: '1.5rem', borderRadius: '12px', background: (file && (!needsPassword || password)) ? 'var(--primary-action)' : '#e5e7eb', color: 'white', border: 'none', fontWeight: 700, cursor: 'pointer' }}
+                            style={{ 
+                                width: '100%', 
+                                height: '52px', 
+                                marginTop: '1.5rem', 
+                                borderRadius: '12px', 
+                                background: (file && status !== "DETECTING" && (!needsPassword || password)) ? 'var(--primary-action)' : '#e5e7eb', 
+                                color: 'white', 
+                                border: 'none', 
+                                fontWeight: 700, 
+                                cursor: (file && status !== "DETECTING" && (!needsPassword || password)) ? 'pointer' : 'not-allowed',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                gap: '8px'
+                            }}
                         >
-                            START EXTRACTION
+                            {status === "DETECTING" ? (
+                                <>
+                                    <Loader2 size={18} className="spin-icon" />
+                                    CHECKING PDF...
+                                </>
+                            ) : (
+                                "START EXTRACTION"
+                            )}
                         </button>
                     </>
                 )}
