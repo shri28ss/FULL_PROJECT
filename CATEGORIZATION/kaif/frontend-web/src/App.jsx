@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from './shared/hooks/useAuth';
 import { useRole } from './context/RoleContext';
 import { supabase, supabaseConfigError } from './shared/supabase';
@@ -25,9 +25,20 @@ import AppLayout from './layouts/AppLayout';
 import QCLayout from './layouts/QCLayout';
 import ProtectedRoute from './components/ProtectedRoute';
 
+// Guard component to handle setup check redirects without breaking route matching
+const ModuleGuard = ({ hasModules, hasIdentifiers, checkSetupStatus, user, toggleTheme, isDarkMode }) => {
+  if (hasModules === false) {
+    return <WelcomeScreen onSetupComplete={checkSetupStatus} toggleTheme={toggleTheme} isDarkMode={isDarkMode} />;
+  }
+  if (hasIdentifiers === false) {
+    return <SetupAccounts onSetupAccountsComplete={checkSetupStatus} />;
+  }
+  return <AppLayout user={user} toggleTheme={toggleTheme} isDarkMode={isDarkMode} />;
+};
+
 function App() {
   const { user, loading: authLoading } = useAuth();
-  const { role } = useRole();
+  const { role, roleLoading } = useRole();
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [hasModules, setHasModules] = useState(null);
   const [hasIdentifiers, setHasIdentifiers] = useState(null);
@@ -112,7 +123,8 @@ function App() {
     );
   }
 
-  if (authLoading || (user && loading)) {
+  // Wait for Auth AND Role to minimize transient "no-user" states during refresh
+  if (authLoading || roleLoading || (user && loading)) {
     return (
       <div style={{ height: '100vh', display: 'grid', placeItems: 'center', backgroundColor: 'var(--bg-primary, #0f172a)', color: 'var(--text-primary, #e2e8f0)', fontFamily: 'Inter, sans-serif' }}>
         Initializing LedgerAI...
@@ -121,46 +133,45 @@ function App() {
   }
 
   return (
-    <BrowserRouter>
-      <ParsingProvider>
-        <Routes>
-          <Route path="/auth" element={user ? <Navigate to={(role === 'QC' || role === 'ADMIN') ? '/qc' : '/'} replace /> : <AuthLayout />}>
-             <Route index element={<AuthPage toggleTheme={toggleTheme} isDarkMode={isDarkMode} />} />
-             <Route path="login" element={<AuthPage toggleTheme={toggleTheme} isDarkMode={isDarkMode} />} />
-          </Route>
+    <ParsingProvider>
+      <Routes>
+        <Route path="/auth" element={user && (window.location.pathname.startsWith('/auth')) ? <Navigate to="/" replace /> : <AuthLayout />}>
+           <Route index element={<AuthPage toggleTheme={toggleTheme} isDarkMode={isDarkMode} />} />
+           <Route path="login" element={<AuthPage toggleTheme={toggleTheme} isDarkMode={isDarkMode} />} />
+        </Route>
 
-          <Route path="/qc" element={
-              <ProtectedRoute allowedRoles={['QC', 'ADMIN']}>
-                 <QCLayout user={user} toggleTheme={toggleTheme} isDarkMode={isDarkMode} />
-              </ProtectedRoute>
-          }>
-             <Route index element={<QCPanel user={user} toggleTheme={toggleTheme} isDarkMode={isDarkMode} />} />
-          </Route>
+        <Route path="/qc" element={
+            <ProtectedRoute allowedRoles={['QC', 'ADMIN']}>
+               <QCLayout user={user} toggleTheme={toggleTheme} isDarkMode={isDarkMode} />
+            </ProtectedRoute>
+        }>
+           <Route index element={<QCPanel user={user} toggleTheme={toggleTheme} isDarkMode={isDarkMode} />} />
+        </Route>
 
-          <Route path="/" element={
-              <ProtectedRoute allowedRoles={['USER']}>
-                 {hasModules === false ? (
-                     <WelcomeScreen onSetupComplete={checkSetupStatus} toggleTheme={toggleTheme} isDarkMode={isDarkMode} />
-                 ) : hasIdentifiers === false ? (
-                     <SetupAccounts onSetupAccountsComplete={checkSetupStatus} />
-                 ) : (
-                     <AppLayout user={user} toggleTheme={toggleTheme} isDarkMode={isDarkMode} />
-                 )}
-              </ProtectedRoute>
-          }>
-               <Route index element={<Overview />} />
-               <Route path="overview" element={<Overview />} />
-               <Route path="parsing" element={<ParsingPage />} />
-               <Route path="transactions" element={<Transactions />} />
-               <Route path="accounts" element={<Accounts />} />
-               <Route path="analytics" element={<Analytics />} />
-               <Route path="review" element={<ReviewPage />} />
-          </Route>
+        <Route path="/" element={
+            <ProtectedRoute>
+               <ModuleGuard 
+                  hasModules={hasModules} 
+                  hasIdentifiers={hasIdentifiers} 
+                  checkSetupStatus={checkSetupStatus} 
+                  user={user} 
+                  toggleTheme={toggleTheme} 
+                  isDarkMode={isDarkMode} 
+               />
+            </ProtectedRoute>
+        }>
+             <Route index element={<Overview />} />
+             <Route path="overview" element={<Overview />} />
+             <Route path="parsing" element={<ParsingPage />} />
+             <Route path="transactions" element={<Transactions />} />
+             <Route path="accounts" element={<Accounts />} />
+             <Route path="analytics" element={<Analytics />} />
+             <Route path="review" element={<ReviewPage />} />
+        </Route>
 
-          <Route path="*" element={<Navigate to={user ? (role === 'QC' ? '/qc' : '/') : '/auth'} replace />} />
-        </Routes>
-      </ParsingProvider>
-    </BrowserRouter>
+        <Route path="*" element={<div style={{ padding: '20px', color: 'white' }}>404 - Not Found ({window.location.pathname})</div>} />
+      </Routes>
+    </ParsingProvider>
   );
 }
 

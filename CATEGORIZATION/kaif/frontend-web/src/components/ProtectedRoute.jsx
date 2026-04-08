@@ -16,10 +16,14 @@ const ProtectedRoute = ({ allowedRoles, children }) => {
   }
 
   if (allowedRoles && !allowedRoles.includes(role)) {
-    if (role === 'QC') {
-      return <Navigate to="/qc" replace />;
-    }
-    return <Navigate to="/" replace />;
+    if (role === 'QC') return <Navigate to="/qc" replace />;
+    return <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', backgroundColor: '#0f172a', color: '#e2e8f0', fontFamily: 'Inter, sans-serif' }}>
+      <div style={{ textAlign: 'center' }}>
+        <h2 style={{ marginBottom: '8px' }}>Access Restricted</h2>
+        <p style={{ color: '#94a3b8' }}>Your role ({role}) does not have permission to view this page.</p>
+        <button onClick={() => window.location.href = '/'} style={{ marginTop: '16px', padding: '8px 16px', borderRadius: '6px', background: '#483EA8', color: 'white', border: 'none', cursor: 'pointer' }}>Go Home</button>
+      </div>
+    </div>;
   }
 
   return children ? children : <Outlet />;
