@@ -3,40 +3,48 @@ import { supabase } from '../../shared/supabase';
 import '../../styles/Analytics.css';
 
 /**
- * Compute date range for a given period (month, quarter, year, all)
+ * Compute date range for a given period
+ * Uses Indian Financial Year: April 1 → March 31
  */
 const getPeriodRange = (period) => {
   const now = new Date();
   const year = now.getFullYear();
-  const month = now.getMonth();
+  const month = now.getMonth(); // 0-indexed
   const day = now.getDate();
+  const todayStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 
   if (period === 'all') {
-    return {
-      from: '2000-01-01',
-      to: `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`
-    };
+    return { from: '2000-01-01', to: todayStr };
   }
   if (period === 'month') {
     return {
       from: `${year}-${String(month + 1).padStart(2, '0')}-01`,
-      to: `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+      to: todayStr
     };
   }
   if (period === 'quarter') {
-    const q = Math.floor(month / 3);
-    const quarterStartMonth = q * 3 + 1;
-    return {
-      from: `${year}-${String(quarterStartMonth).padStart(2, '0')}-01`,
-      to: `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`
-    };
+    // Indian FY Quarters: Q1=Apr-Jun, Q2=Jul-Sep, Q3=Oct-Dec, Q4=Jan-Mar
+    let qStart;
+    if (month >= 3 && month <= 5) qStart = `${year}-04-01`;       // Q1
+    else if (month >= 6 && month <= 8) qStart = `${year}-07-01`;  // Q2
+    else if (month >= 9 && month <= 11) qStart = `${year}-10-01`; // Q3
+    else qStart = `${year}-01-01`;                                 // Q4
+    return { from: qStart, to: todayStr };
   }
   if (period === 'year') {
-    return {
-      from: `${year}-01-01`,
-      to: `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`
-    };
+    // Indian FY: Apr 1 of current/previous year
+    const fyStartYear = month >= 3 ? year : year - 1;
+    return { from: `${fyStartYear}-04-01`, to: todayStr };
   }
+  return { from: '2000-01-01', to: todayStr };
+};
+
+/**
+ * Format currency value for P&L table — show as number with 2 decimal places
+ */
+const formatPLAmount = (amount) => {
+  if (amount === undefined || amount === null || amount === 0) return '0.00';
+  return Math.abs(amount).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
 
 /**
@@ -44,7 +52,8 @@ const getPeriodRange = (period) => {
  */
 const formatCurrency = (amount) => {
   if (amount === undefined || amount === null) return '₹0';
-  return `₹${Math.abs(amount).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
+  const isNegative = amount < 0;
+  return `${isNegative ? '-' : ''}₹${Math.abs(amount).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
 };
 
 /**
@@ -56,9 +65,17 @@ const formatDate = (dateStr) => {
   return date.toLocaleDateString('en-IN', { year: 'numeric', month: 'short', day: '2-digit' });
 };
 
+/**
+ * Known COGS-type root account name patterns
+ * Only users who selected business/farm modules will have these
+ */
+const COGS_KEYWORDS = [
+  'cost of goods sold', 'cogs',
+  'direct farming costs', 'direct material costs', 'direct cost',
+];
 const Analytics = () => {
   const [view, setView] = useState('pl');           // 'pl' | 'balance' | 'ledger'
-  const [period, setPeriod] = useState('month');    // 'month' | 'quarter' | 'year' | 'all'
+  const [period, setPeriod] = useState('all');      // 'month' | 'quarter' | 'year' | 'all' | 'custom'
   const [loading, setLoading] = useState(true);
   const [plData, setPlData] = useState(null);
   const [balanceData, setBalanceData] = useState(null);
@@ -66,6 +83,20 @@ const Analytics = () => {
   const [selectedAccountId, setSelectedAccountId] = useState('ALL');
   const [bankAccounts, setBankAccounts] = useState([]);
   const [includePending, setIncludePending] = useState(false);
+
+  // Custom date range state
+  const getDefaultDates = () => {
+    const now = new Date();
+    const fyStartYear = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+    return {
+      from: `${fyStartYear}-04-01`,
+      to: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+    };
+  };
+  const defaults = getDefaultDates();
+  const [customFrom, setCustomFrom] = useState(defaults.from);
+  const [customTo, setCustomTo] = useState(defaults.to);
+  const [showCustomPopup, setShowCustomPopup] = useState(false);
 
   useEffect(() => {
     const fetchAccounts = async () => {
@@ -93,10 +124,43 @@ const Analytics = () => {
         return;
       }
 
-      const range = getPeriodRange(period);
+      const range = period === 'custom'
+        ? { from: customFrom, to: customTo }
+        : getPeriodRange(period);
 
-      if (view === 'pl') {
-        // Fetch P&L data
+      console.log('Analytics fetch:', { period, range, view });
+
+      // Fetch entire accounts hierarchy for this user (needed by both P&L and Balance Sheet)
+      const { data: allAccounts } = await supabase
+        .from('accounts')
+        .select('account_id, account_name, account_type, parent_account_id, balance_nature')
+        .eq('user_id', user.id);
+
+      // Build a quick lookup by account_id
+      const acctMap = {};
+      (allAccounts || []).forEach(a => { acctMap[a.account_id] = a; });
+
+      // Helper: get root parent name for an account (the top-level parent with no parent)
+      const getRootParentName = (accountId) => {
+        let current = acctMap[accountId];
+        if (!current) return null;
+        while (current.parent_account_id && acctMap[current.parent_account_id]) {
+          // Only walk up if parent is same type
+          const parent = acctMap[current.parent_account_id];
+          if (parent.account_type !== current.account_type) break;
+          current = parent;
+        }
+        return current.account_name;
+      };
+
+      // Determine which root EXPENSE parents the user has that are COGS-type
+      const userHasCogs = (allAccounts || []).some(a =>
+        a.account_type === 'EXPENSE' &&
+        !a.parent_account_id &&
+        COGS_KEYWORDS.some(kw => a.account_name.toLowerCase().includes(kw))
+      );
+
+      if (view === 'pl') {        // Step 2: Fetch P&L transactions
         let query = supabase
           .from('transactions')
           .select(`
@@ -123,25 +187,64 @@ const Analytics = () => {
         }
 
         const { data, error } = await query;
-
-        console.log('P&L Query:', { user_id: user.id, range, data, error });
         if (error) throw error;
 
-        // Compute P&L from official posted transactions
-        let totalIncome = 0;
-        let totalExpense = 0;
-        const incomeBreakdown = {};
-        const expenseBreakdown = {};
+        // Step 3: Initialize groups with all COA accounts so all categories show
+        const incomeGroups = {};
+        const expenseGroups = {};
+        const cogsGroup = {};
 
-        (data || []).forEach(txn => {
-          if (txn.offset_account && txn.offset_account.account_type === 'INCOME') {
-            totalIncome += txn.amount || 0;
-            const accountName = txn.offset_account.account_name;
-            incomeBreakdown[accountName] = (incomeBreakdown[accountName] || 0) + (txn.amount || 0);
-          } else if (txn.offset_account && txn.offset_account.account_type === 'EXPENSE') {
-            totalExpense += txn.amount || 0;
-            const accountName = txn.offset_account.account_name;
-            expenseBreakdown[accountName] = (expenseBreakdown[accountName] || 0) + (txn.amount || 0);
+        (allAccounts || []).forEach(account => {
+          const type = account.account_type;
+          const accountName = account.account_name || '';
+          const nameLower = accountName.toLowerCase();
+          
+          if (nameLower.includes('uncategor') || nameLower.includes('unclassifi')) return;
+
+          if (type === 'INCOME' || type === 'EXPENSE') {
+            const rootParent = getRootParentName(account.account_id) || accountName;
+            if (rootParent.toLowerCase().includes('uncategor') || rootParent.toLowerCase().includes('unclassifi')) return;
+            
+            if (type === 'INCOME') {
+              if (!incomeGroups[rootParent]) incomeGroups[rootParent] = {};
+              incomeGroups[rootParent][accountName] = 0;
+            } else if (type === 'EXPENSE') {
+              const isCogs = COGS_KEYWORDS.some(kw => rootParent.toLowerCase().includes(kw));
+              if (isCogs) {
+                cogsGroup[accountName] = 0;
+              } else {
+                if (!expenseGroups[rootParent]) expenseGroups[rootParent] = {};
+                expenseGroups[rootParent][accountName] = 0;
+              }
+            }
+          }
+        });
+
+        // Add amounts from actual transactions
+        (data || []).forEach((txn) => {
+          if (!txn.offset_account) return;
+          const accountName = txn.offset_account.account_name || '';
+          const nameLower = accountName.toLowerCase();
+          // Skip catch-all
+          if (nameLower.includes('uncategor') || nameLower.includes('unclassifi')) return;
+
+          const amt = txn.amount || 0;
+          const type = txn.offset_account.account_type;
+          const rootParent = getRootParentName(txn.offset_account.account_id) || accountName;
+          
+          if (rootParent.toLowerCase().includes('uncategor') || rootParent.toLowerCase().includes('unclassifi')) return;
+
+          if (type === 'INCOME') {
+            if (!incomeGroups[rootParent]) incomeGroups[rootParent] = {};
+            incomeGroups[rootParent][accountName] = (incomeGroups[rootParent][accountName] || 0) + amt;
+          } else if (type === 'EXPENSE') {
+            const isCogs = COGS_KEYWORDS.some(kw => rootParent.toLowerCase().includes(kw));
+            if (isCogs) {
+              cogsGroup[accountName] = (cogsGroup[accountName] || 0) + amt;
+            } else {
+              if (!expenseGroups[rootParent]) expenseGroups[rootParent] = {};
+              expenseGroups[rootParent][accountName] = (expenseGroups[rootParent][accountName] || 0) + amt;
+            }
           }
         });
 
@@ -163,40 +266,72 @@ const Analytics = () => {
           (pendingData || []).forEach(txn => {
             const credit = parseFloat(txn.credit) || 0;
             const debit = parseFloat(txn.debit) || 0;
-            // Try to get category name from joined transactions table
             const linkedTxn = txn.transactions && txn.transactions.length > 0 ? txn.transactions[0] : null;
             const offsetAcc = linkedTxn?.accounts;
 
             if (credit > 0) {
               const catName = (offsetAcc?.account_type === 'INCOME') ? offsetAcc.account_name : 'Pending Income';
-              totalIncome += credit;
-              incomeBreakdown[catName] = (incomeBreakdown[catName] || 0) + credit;
+              if (!incomeGroups['Pending']) incomeGroups['Pending'] = {};
+              incomeGroups['Pending'][catName] = (incomeGroups['Pending'][catName] || 0) + credit;
             }
             if (debit > 0) {
               const catName = (offsetAcc?.account_type === 'EXPENSE') ? offsetAcc.account_name : 'Pending Expense';
-              totalExpense += debit;
-              expenseBreakdown[catName] = (expenseBreakdown[catName] || 0) + debit;
+              if (!expenseGroups['Pending']) expenseGroups['Pending'] = {};
+              expenseGroups['Pending'][catName] = (expenseGroups['Pending'][catName] || 0) + debit;
             }
           });
         }
 
-        const netPL = totalIncome - totalExpense;
+        // Step 4: Compute totals
+        const toSorted = (obj) =>
+          Object.entries(obj)
+            .map(([name, amount]) => ({ name, amount }))
+            .sort((a, b) => b.amount - a.amount);
+        const sumGroup = (obj) => Object.values(obj).reduce((s, v) => s + v, 0);
+
+        const incomeGroupsArray = Object.entries(incomeGroups)
+          .map(([groupName, items]) => ({
+            groupName,
+            items: toSorted(items),
+            total: sumGroup(items)
+          }))
+          .sort((a, b) => b.total - a.total);
+
+        const expenseGroupsArray = Object.entries(expenseGroups)
+          .map(([groupName, items]) => ({
+            groupName,
+            items: toSorted(items),
+            total: sumGroup(items)
+          }))
+          .sort((a, b) => b.total - a.total);
+
+        const cogsItems = toSorted(cogsGroup);
+        const totalCogs = sumGroup(cogsGroup);
+
+        const totalIncome = incomeGroupsArray.reduce((s, g) => s + g.total, 0);
+        const totalExpense = expenseGroupsArray.reduce((s, g) => s + g.total, 0);
+        
+        const grossProfit = totalIncome - totalCogs;
+        const netPL = userHasCogs 
+          ? grossProfit - totalExpense 
+          : totalIncome - totalExpense;
 
         setPlData({
+          incomeGroups: incomeGroupsArray,
+          expenseGroups: expenseGroupsArray,
+          cogsItems,
           totalIncome,
+          totalCogs,
+          grossProfit,
           totalExpense,
           netPL,
+          hasCogs: userHasCogs || totalCogs > 0,
           isPending: includePending,
-          incomeBreakdown: Object.entries(incomeBreakdown)
-            .map(([name, amount]) => ({ name, amount }))
-            .sort((a, b) => b.amount - a.amount),
-          expenseBreakdown: Object.entries(expenseBreakdown)
-            .map(([name, amount]) => ({ name, amount }))
-            .sort((a, b) => b.amount - a.amount)
+          dateRange: range,
         });
       } else if (view === 'balance') {
         // Fetch Balance Sheet data
-        const { data, error } = await supabase
+        let bsQuery = supabase
           .from('ledger_entries')
           .select(`
             debit_amount,
@@ -215,22 +350,48 @@ const Analytics = () => {
           .gte('entry_date', range.from)
           .lte('entry_date', range.to);
 
+        if (selectedAccountId !== 'ALL') {
+          bsQuery = bsQuery.eq('account_id', selectedAccountId);
+        }
+
+        const { data, error } = await bsQuery;
+
         console.log('Balance Sheet Query:', { user_id: user.id, range, data, error });
         if (error) throw error;
 
         // Compute balances from ledger entries
         const accountMap = {};
+        
+        // Initialize all Balance Sheet accounts from COA so all categories show
+        (allAccounts || []).forEach(account => {
+          if (['ASSET', 'LIABILITY', 'EQUITY'].includes(account.account_type)) {
+            const parent = allAccounts.find(a => a.account_id === account.parent_account_id);
+            accountMap[account.account_id] = {
+              account_id: account.account_id,
+              account_name: account.account_name,
+              account_type: account.account_type,
+              balance_nature: account.balance_nature,
+              parent_name: parent ? parent.account_name : (account.account_type === 'ASSET' ? 'Other Assets' : (account.account_type === 'LIABILITY' ? 'Other Liabilities' : 'Equities')),
+              totalDebit: 0,
+              totalCredit: 0
+            };
+          }
+        });
+
         (data || []).forEach(entry => {
           if (!entry.account) return;
-          const { account_id, account_name, account_type, balance_nature } = entry.account;
-          if (account_type !== 'ASSET' && account_type !== 'LIABILITY') return;
+          const { account_id, account_type } = entry.account;
+          if (!['ASSET', 'LIABILITY', 'EQUITY'].includes(account_type)) return;
 
+          // If somehow the account wasn't in our initial map (e.g., deleted from COA but exists in ledger), we gracefully add it
           if (!accountMap[account_id]) {
+            const { account_name, balance_nature, parent_account } = entry.account;
             accountMap[account_id] = {
               account_id,
               account_name,
               account_type,
               balance_nature,
+              parent_name: parent_account ? parent_account.account_name : (account_type === 'ASSET' ? 'Other Assets' : (account_type === 'LIABILITY' ? 'Other Liabilities' : 'Equities')),
               totalDebit: 0,
               totalCredit: 0
             };
@@ -239,24 +400,48 @@ const Analytics = () => {
           accountMap[account_id].totalCredit += entry.credit_amount || 0;
         });
 
-        // Compute final balance per account
+        // Compute final balance per account (DO NOT FILTER ZERO BALANCES)
         const accounts = Object.values(accountMap).map(acc => ({
           ...acc,
           balance: acc.balance_nature === 'DEBIT'
             ? acc.totalDebit - acc.totalCredit
             : acc.totalCredit - acc.totalDebit
-        })).filter(acc => acc.balance !== 0);
+        }));
 
-        const assets = accounts.filter(a => a.account_type === 'ASSET')
-          .sort((a, b) => b.balance - a.balance);
-        const liabilities = accounts.filter(a => a.account_type === 'LIABILITY')
-          .sort((a, b) => b.balance - a.balance);
+        const assetsGroups = {};
+        const liabilitiesEquitiesGroups = {};
 
-        const totalAssets = assets.reduce((sum, a) => sum + a.balance, 0);
-        const totalLiabilities = liabilities.reduce((sum, a) => sum + a.balance, 0);
-        const netWorth = totalAssets - totalLiabilities;
+        accounts.forEach(a => {
+            const groupName = a.parent_name;
+            if (a.account_type === 'ASSET') {
+               if(!assetsGroups[groupName]) assetsGroups[groupName] = [];
+               assetsGroups[groupName].push({ name: a.account_name, amount: a.balance });
+            } else {
+               if(!liabilitiesEquitiesGroups[groupName]) liabilitiesEquitiesGroups[groupName] = [];
+               liabilitiesEquitiesGroups[groupName].push({ name: a.account_name, amount: a.balance });
+            }
+        });
 
-        setBalanceData({ assets, liabilities, totalAssets, totalLiabilities, netWorth });
+        const toSortedSummary = (groupObj) => {
+            return Object.entries(groupObj).map(([groupName, items]) => {
+                const total = items.reduce((s, i) => s + i.amount, 0);
+                return { groupName, items: items.sort((a,b) => b.amount - a.amount), total };
+            }).sort((a,b) => b.total - a.total);
+        }
+
+        const assetsArr = toSortedSummary(assetsGroups);
+        const liabEqArr = toSortedSummary(liabilitiesEquitiesGroups);
+
+        const totalAssets = assetsArr.reduce((s, g) => s + g.total, 0);
+        const totalLiabilitiesEquities = liabEqArr.reduce((s, g) => s + g.total, 0);
+
+        setBalanceData({ 
+            assetsGroups: assetsArr, 
+            liabilitiesEquitiesGroups: liabEqArr, 
+            totalAssets, 
+            totalLiabilitiesEquities,
+            dateRange: range
+        });
       } else {
         // Fetch Ledger data
         const { data, error } = await supabase
@@ -298,10 +483,10 @@ const Analytics = () => {
 
   useEffect(() => {
     fetchData();
-  }, [period, view, selectedAccountId, includePending]);
+  }, [period, view, selectedAccountId, includePending, customFrom, customTo]);
 
   /**
-   * Render P&L View
+   * Render P&L View — Zoho Books style table format
    */
   const renderPLView = () => {
     if (loading) {
@@ -326,97 +511,222 @@ const Analytics = () => {
       );
     }
 
-    const { totalIncome, totalExpense, netPL, incomeBreakdown, expenseBreakdown, isPending } = plData;
+    const {
+      incomeGroups, expenseGroups,
+      cogsItems, hasCogs,
+      totalIncome, totalCogs, grossProfit, totalExpense,
+      netPL, isPending, dateRange
+    } = plData;
+
+    // Format date range for header
+    const fmtDate = (d) => {
+      const dt = new Date(d + 'T00:00:00');
+      return dt.toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' });
+    };
+
+    const exportPLToCSV = () => {
+      const rows = [];
+      const escape = (str) => `"${String(str).replace(/"/g, '""')}"`;
+      
+      // Title and Meta
+      rows.push(['Profit and Loss'].map(escape).join(','));
+      rows.push([`From ${dateRange ? fmtDate(dateRange.from) : ''} To ${dateRange ? fmtDate(dateRange.to) : ''}`].map(escape).join(','));
+      rows.push('');
+      
+      // Header
+      rows.push(['ACCOUNT', 'TOTAL'].map(escape).join(','));
+      
+      // Income Groups
+      incomeGroups.forEach(group => {
+        rows.push([group.groupName, ''].map(escape).join(','));
+        group.items.forEach(item => {
+          rows.push([`  ${item.name}`, item.amount].map(escape).join(','));
+        });
+        rows.push([`Total for ${group.groupName}`, group.total].map(escape).join(','));
+        rows.push('');
+      });
+      
+      rows.push(['Total Income', totalIncome].map(escape).join(','));
+      rows.push('');
+      
+      // COGS
+      if (hasCogs) {
+        rows.push(['Cost of Goods Sold', ''].map(escape).join(','));
+        cogsItems.forEach(item => {
+          rows.push([`  ${item.name}`, item.amount].map(escape).join(','));
+        });
+        rows.push(['Total for Cost of Goods Sold', totalCogs].map(escape).join(','));
+        rows.push('');
+        rows.push(['Gross Profit', grossProfit].map(escape).join(','));
+        rows.push('');
+      }
+      
+      // Expense Groups
+      expenseGroups.forEach(group => {
+        rows.push([group.groupName, ''].map(escape).join(','));
+        group.items.forEach(item => {
+          rows.push([`  ${item.name}`, item.amount].map(escape).join(','));
+        });
+        rows.push([`Total for ${group.groupName}`, group.total].map(escape).join(','));
+        rows.push('');
+      });
+      
+      rows.push(['Total Expenses', totalExpense].map(escape).join(','));
+      rows.push('');
+      rows.push(['Net Profit/Loss', netPL].map(escape).join(','));
+
+      const csvContent = "data:text/csv;charset=utf-8," + rows.join('\n');
+      const encodedUri = encodeURI(csvContent);
+      const link = document.createElement("a");
+      link.setAttribute("href", encodedUri);
+      link.setAttribute("download", `Profit_and_Loss_${new Date().toISOString().split('T')[0]}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    };
 
     return (
-      <div className="analytics-content">
+      <div className="pl-report-container">
         {isPending && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', padding: '8px 14px', background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: '8px', fontSize: '13px', color: '#d97706' }}>
+          <div className="pl-projected-banner">
             <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
-            <span><strong>Projected View</strong> — includes pending/unposted transactions from raw statements. Numbers are estimates.</span>
+            <span><strong>Projected View</strong> — includes pending/unposted transactions. Numbers are estimates.</span>
           </div>
         )}
-        {/* Summary Cards */}
-        <div className="summary-cards">
-          <div className="summary-card">
-            <div className="card-label">Total Income {isPending && <span style={{ fontSize: '10px', background: '#f59e0b', color: '#fff', padding: '1px 5px', borderRadius: '4px', marginLeft: '4px', verticalAlign: 'middle' }}>PROJECTED</span>}</div>
-            <div className="card-value income">{formatCurrency(totalIncome)}</div>
+
+        {/* Report Header */}
+        <div className="pl-report-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+          <div>
+            <h2 className="pl-report-title">Profit and Loss</h2>
+            <div className="pl-report-meta">
+              <span>Basis : Accrual</span>
+              <span>From {dateRange ? fmtDate(dateRange.from) : ''} To {dateRange ? fmtDate(dateRange.to) : ''}</span>
+            </div>
           </div>
-          <div className="summary-card">
-            <div className="card-label">Total Expenses {isPending && <span style={{ fontSize: '10px', background: '#f59e0b', color: '#fff', padding: '1px 5px', borderRadius: '4px', marginLeft: '4px', verticalAlign: 'middle' }}>PROJECTED</span>}</div>
-            <div className="card-value expense">{formatCurrency(totalExpense)}</div>
+          <button 
+            className="action-btn outline-btn" 
+            onClick={exportPLToCSV}
+            style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 16px', fontSize: '0.9rem' }}
+          >
+            <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+            Export CSV
+          </button>
+        </div>
+
+        {/* P&L Table */}
+        <div className="pl-table">
+          {/* Table Header */}
+          <div className="pl-table-header">
+            <div className="pl-col-account">ACCOUNT</div>
+            <div className="pl-col-total">TOTAL</div>
           </div>
-          <div className="summary-card">
-            <div className="card-label">Net P&L {isPending && <span style={{ fontSize: '10px', background: '#f59e0b', color: '#fff', padding: '1px 5px', borderRadius: '4px', marginLeft: '4px', verticalAlign: 'middle' }}>PROJECTED</span>}</div>
-            <div className={`card-value ${netPL >= 0 ? 'net-positive' : 'net-negative'}`}>
-              {formatCurrency(netPL)}
+
+          {/* Dynamic Income Sections */}
+          {incomeGroups.map((group, gIdx) => (
+            <React.Fragment key={`inc-group-${gIdx}`}>
+              <div className="pl-section-heading">{group.groupName}</div>
+              {group.items.map((item, idx) => (
+                <div key={`inc-item-${gIdx}-${idx}`} className="pl-row">
+                  <div className="pl-col-account pl-indent">{item.name}</div>
+                  <div className="pl-col-total">{formatPLAmount(item.amount)}</div>
+                </div>
+              ))}
+              <div className="pl-row pl-row-subtotal">
+                <div className="pl-col-account"><strong>Total for {group.groupName}</strong></div>
+                <div className="pl-col-total"><strong>{formatPLAmount(group.total)}</strong></div>
+              </div>
+            </React.Fragment>
+          ))}
+
+          {incomeGroups.length === 0 && (
+            <>
+               <div className="pl-section-heading">Income</div>
+               <div className="pl-row pl-row-empty">
+                 <div className="pl-col-account pl-indent pl-text-muted">—</div>
+                 <div className="pl-col-total pl-text-muted">—</div>
+               </div>
+            </>
+          )}
+
+          <div className="pl-row pl-row-highlight" style={{ backgroundColor: 'var(--bg-card)', borderBottom: '2px solid var(--border-color)', borderTop: 'none' }}>
+            <div className="pl-col-account"><strong>Total Income</strong></div>
+            <div className="pl-col-total"><strong>{formatPLAmount(totalIncome)}</strong></div>
+          </div>
+
+          {/* Conditionally Render COGS and Gross Profit */}
+          {hasCogs && (
+            <>
+              <div className="pl-section-heading">Cost of Goods Sold</div>
+              {cogsItems.length === 0 ? (
+                <div className="pl-row pl-row-empty">
+                  <div className="pl-col-account pl-indent pl-text-muted">—</div>
+                  <div className="pl-col-total pl-text-muted">—</div>
+                </div>
+              ) : (
+                cogsItems.map((item, idx) => (
+                  <div key={`cogs-${idx}`} className="pl-row">
+                    <div className="pl-col-account pl-indent">{item.name}</div>
+                    <div className="pl-col-total">{formatPLAmount(item.amount)}</div>
+                  </div>
+                ))
+              )}
+              <div className="pl-row pl-row-subtotal">
+                <div className="pl-col-account"><strong>Total for Cost of Goods Sold</strong></div>
+                <div className="pl-col-total"><strong>{formatPLAmount(totalCogs)}</strong></div>
+              </div>
+
+              {/* Gross Profit */}
+              <div className="pl-row pl-row-highlight" style={{ backgroundColor: 'var(--bg-card)', borderBottom: '2px solid var(--border-color)', borderTop: 'none' }}>
+                <div className="pl-col-account"><strong>Gross Profit</strong></div>
+                <div className="pl-col-total"><strong>{formatPLAmount(grossProfit)}</strong></div>
+              </div>
+            </>
+          )}
+
+          {/* Dynamic Expense Sections */}
+          {expenseGroups.map((group, gIdx) => (
+             <React.Fragment key={`exp-group-${gIdx}`}>
+               <div className="pl-section-heading">{group.groupName}</div>
+               {group.items.map((item, idx) => (
+                 <div key={`exp-item-${gIdx}-${idx}`} className="pl-row">
+                   <div className="pl-col-account pl-indent">{item.name}</div>
+                   <div className="pl-col-total">{formatPLAmount(item.amount)}</div>
+                 </div>
+               ))}
+               <div className="pl-row pl-row-subtotal">
+                 <div className="pl-col-account"><strong>Total for {group.groupName}</strong></div>
+                 <div className="pl-col-total"><strong>{formatPLAmount(group.total)}</strong></div>
+               </div>
+             </React.Fragment>
+          ))}
+
+          {expenseGroups.length === 0 && (
+            <>
+              <div className="pl-section-heading">Expenses</div>
+              <div className="pl-row pl-row-empty">
+                <div className="pl-col-account pl-indent pl-text-muted">—</div>
+                <div className="pl-col-total pl-text-muted">—</div>
+              </div>
+            </>
+          )}
+
+          <div className="pl-row pl-row-highlight" style={{ backgroundColor: 'var(--bg-card)', borderBottom: '2px solid var(--border-color)', borderTop: 'none' }}>
+            <div className="pl-col-account"><strong>Total Expenses</strong></div>
+            <div className="pl-col-total"><strong>{formatPLAmount(totalExpense)}</strong></div>
+          </div>
+
+          {/* Net Profit/Loss */}
+          <div className="pl-row pl-row-net" style={{ marginTop: '15px' }}>
+            <div className="pl-col-account"><strong>Net Profit/Loss</strong></div>
+            <div className={`pl-col-total pl-net-value ${netPL >= 0 ? 'pl-positive' : 'pl-negative'}`}>
+              <strong>{formatPLAmount(netPL)}</strong>
             </div>
           </div>
         </div>
 
-        {/* Breakdown Grid */}
-        <div className="breakdown-grid">
-          {/* Income Breakdown */}
-          <div className="breakdown-card">
-            <h3>Income Breakdown</h3>
-            {incomeBreakdown.length === 0 ? (
-              <div className="breakdown-empty">No income recorded for this period</div>
-            ) : (
-              incomeBreakdown.map((item, idx) => {
-                const pct = totalIncome > 0 ? ((item.amount / totalIncome) * 100).toFixed(1) : 0;
-                return (
-                  <div key={idx} style={{ marginBottom: '14px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
-                      <span style={{ fontSize: '13px', color: 'var(--text-primary)', fontWeight: '500' }}>{item.name}</span>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>{pct}%</span>
-                        <span style={{ fontSize: '13px', fontWeight: '700', color: '#10b981' }}>{formatCurrency(item.amount)}</span>
-                      </div>
-                    </div>
-                    <div style={{ height: '6px', background: 'var(--bg-primary)', borderRadius: '999px', overflow: 'hidden' }}>
-                      <div style={{
-                        height: '100%', borderRadius: '999px',
-                        background: 'linear-gradient(90deg, #10b981, #34d399)',
-                        width: `${pct}%`,
-                        transition: 'width 0.8s cubic-bezier(0.4,0,0.2,1)'
-                      }} />
-                    </div>
-                  </div>
-                );
-              })
-            )}
-          </div>
-
-          {/* Expense Breakdown */}
-          <div className="breakdown-card">
-            <h3>Expense Breakdown</h3>
-            {expenseBreakdown.length === 0 ? (
-              <div className="breakdown-empty">No expenses recorded for this period</div>
-            ) : (
-              expenseBreakdown.map((item, idx) => {
-                const pct = totalExpense > 0 ? ((item.amount / totalExpense) * 100).toFixed(1) : 0;
-                return (
-                  <div key={idx} style={{ marginBottom: '14px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
-                      <span style={{ fontSize: '13px', color: 'var(--text-primary)', fontWeight: '500' }}>{item.name}</span>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>{pct}%</span>
-                        <span style={{ fontSize: '13px', fontWeight: '700', color: '#ef4444' }}>{formatCurrency(item.amount)}</span>
-                      </div>
-                    </div>
-                    <div style={{ height: '6px', background: 'var(--bg-primary)', borderRadius: '999px', overflow: 'hidden' }}>
-                      <div style={{
-                        height: '100%', borderRadius: '999px',
-                        background: 'linear-gradient(90deg, #ef4444, #f87171)',
-                        width: `${pct}%`,
-                        transition: 'width 0.8s cubic-bezier(0.4,0,0.2,1)'
-                      }} />
-                    </div>
-                  </div>
-                );
-              })
-            )}
-          </div>
+        {/* Currency Note */}
+        <div className="pl-currency-note">
+          **Amount is displayed in your base currency <span className="pl-currency-badge">INR</span>
         </div>
       </div>
     );
@@ -448,164 +758,135 @@ const Analytics = () => {
       );
     }
 
-    const { assets, liabilities, totalAssets, totalLiabilities, netWorth } = balanceData;
+    const { assetsGroups, liabilitiesEquitiesGroups, totalAssets, totalLiabilitiesEquities, dateRange } = balanceData;
 
-    // Compute financial ratios
-    const debtRatio     = totalAssets > 0 ? ((totalLiabilities / totalAssets) * 100).toFixed(1) : 0;
-    const deRatio       = (totalAssets - totalLiabilities) > 0
-      ? (totalLiabilities / (totalAssets - totalLiabilities)).toFixed(2)
-      : '∞';
-    const netWorthPositive = netWorth >= 0;
-    const assetPct  = (totalAssets + totalLiabilities) > 0 ? (totalAssets / (totalAssets + totalLiabilities)) * 100 : 50;
+    const fmtDate = (d) => {
+      const dt = new Date(d + 'T00:00:00');
+      return dt.toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' });
+    };
+
+    const exportBalanceToCSV = () => {
+      const rows = [];
+      const escape = (str) => `"${String(str).replace(/"/g, '""')}"`;
+      
+      rows.push(['Balance Sheet'].map(escape).join(','));
+      rows.push([`As of ${dateRange ? fmtDate(dateRange.to) : ''}`].map(escape).join(','));
+      rows.push('');
+      rows.push(['ACCOUNT', 'TOTAL'].map(escape).join(','));
+      
+      rows.push(['Assets', ''].map(escape).join(','));
+      assetsGroups.forEach(group => {
+        rows.push([group.groupName, ''].map(escape).join(','));
+        group.items.forEach(item => {
+          rows.push([`  ${item.name}`, item.amount].map(escape).join(','));
+        });
+        rows.push([`Total for ${group.groupName}`, group.total].map(escape).join(','));
+        rows.push('');
+      });
+      rows.push(['Total for Assets', totalAssets].map(escape).join(','));
+      rows.push('');
+      
+      rows.push(['Liabilities & Equities', ''].map(escape).join(','));
+      liabilitiesEquitiesGroups.forEach(group => {
+        rows.push([group.groupName, ''].map(escape).join(','));
+        group.items.forEach(item => {
+          rows.push([`  ${item.name}`, item.amount].map(escape).join(','));
+        });
+        rows.push([`Total for ${group.groupName}`, group.total].map(escape).join(','));
+        rows.push('');
+      });
+      rows.push(['Total for Liabilities & Equities', totalLiabilitiesEquities].map(escape).join(','));
+
+      const csvContent = "data:text/csv;charset=utf-8," + rows.join('\n');
+      const encodedUri = encodeURI(csvContent);
+      const link = document.createElement("a");
+      link.setAttribute("href", encodedUri);
+      link.setAttribute("download", `Balance_Sheet_${new Date().toISOString().split('T')[0]}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    };
 
     return (
-      <div className="analytics-content">
-
-        {/* Summary Cards */}
-        <div className="summary-cards">
-          <div className="summary-card">
-            <div className="card-label">Total Assets</div>
-            <div className="card-value income">{formatCurrency(totalAssets)}</div>
-          </div>
-          <div className="summary-card">
-            <div className="card-label">Total Liabilities</div>
-            <div className="card-value expense">{formatCurrency(totalLiabilities)}</div>
-          </div>
-          <div className="summary-card">
-            <div className="card-label">
-              Net Worth
-              <span style={{
-                marginLeft: '8px', fontSize: '10px', fontWeight: '700',
-                padding: '2px 7px', borderRadius: '999px',
-                background: netWorthPositive ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)',
-                color: netWorthPositive ? '#059669' : '#dc2626'
-              }}>
-                {netWorthPositive ? '▲ POSITIVE' : '▼ NEGATIVE'}
-              </span>
-            </div>
-            <div className={`card-value ${netWorthPositive ? 'net-positive' : 'net-negative'}`}>
-              {formatCurrency(netWorth)}
+      <div className="pl-report-container">
+        {/* Report Header */}
+        <div className="pl-report-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+          <div>
+            <h2 className="pl-report-title">Balance Sheet</h2>
+            <div className="pl-report-meta">
+              <span>Basis : Accrual</span>
+              <span>As of {dateRange ? fmtDate(dateRange.to) : ''}</span>
             </div>
           </div>
+          <button 
+            className="action-btn outline-btn" 
+            onClick={exportBalanceToCSV}
+            style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 16px', fontSize: '0.9rem' }}
+          >
+            <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+            Export CSV
+          </button>
         </div>
 
-        {/* Financial Ratios Row */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: '12px', marginBottom: '20px' }}>
-          {[
-            {
-              label: 'Debt Ratio',
-              value: `${debtRatio}%`,
-              sub: 'Liabilities ÷ Assets',
-              good: Number(debtRatio) < 50,
-              tip: Number(debtRatio) < 50 ? 'Healthy' : 'High Debt'
-            },
-            {
-              label: 'Debt-to-Equity',
-              value: deRatio,
-              sub: 'Liabilities ÷ Equity',
-              good: deRatio !== '∞' && Number(deRatio) < 1,
-              tip: deRatio !== '∞' && Number(deRatio) < 1 ? 'Low Risk' : 'Leveraged'
-            },
-            {
-              label: 'Equity',
-              value: formatCurrency(totalAssets - totalLiabilities),
-              sub: 'Assets − Liabilities',
-              good: (totalAssets - totalLiabilities) >= 0,
-              tip: (totalAssets - totalLiabilities) >= 0 ? 'Solvent' : 'Insolvent'
-            }
-          ].map((r, i) => (
-            <div key={i} style={{
-              padding: '14px 16px', borderRadius: '10px',
-              border: '1px solid var(--border-color)',
-              background: 'var(--bg-card)'
-            }}>
-              <div style={{ fontSize: '11px', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '4px' }}>{r.label}</div>
-              <div style={{ fontSize: '22px', fontWeight: '800', color: r.good ? '#10b981' : '#ef4444', marginBottom: '4px' }}>{r.value}</div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>{r.sub}</span>
-                <span style={{
-                  fontSize: '10px', fontWeight: '700', padding: '1px 6px', borderRadius: '4px',
-                  background: r.good ? 'rgba(16,185,129,0.12)' : 'rgba(239,68,68,0.12)',
-                  color: r.good ? '#059669' : '#dc2626'
-                }}>{r.tip}</span>
-              </div>
-            </div>
+        {/* Balance Sheet Table */}
+        <div className="pl-table">
+          {/* Table Header */}
+          <div className="pl-table-header">
+            <div className="pl-col-account">ACCOUNT</div>
+            <div className="pl-col-total">TOTAL</div>
+          </div>
+
+          <div className="pl-section-heading" style={{ fontSize:'15px', fontWeight:'700', padding:'12px 16px', background:'var(--bg-primary)' }}>Assets</div>
+          
+          {assetsGroups.map((group, gIdx) => (
+             <React.Fragment key={`ast-grp-${gIdx}`}>
+               <div className="pl-section-heading" style={{ paddingLeft: '24px', background:'transparent', borderTop: 'none', borderBottom: 'none' }}>{group.groupName}</div>
+               {group.items.map((item, idx) => (
+                 <div key={`ast-item-${gIdx}-${idx}`} className="pl-row">
+                   <div className="pl-col-account pl-indent" style={{ paddingLeft: '48px' }}>{item.name}</div>
+                   <div className="pl-col-total">{formatPLAmount(item.amount)}</div>
+                 </div>
+               ))}
+               <div className="pl-row pl-row-subtotal">
+                 <div className="pl-col-account" style={{ paddingLeft: '24px' }}><strong>Total for {group.groupName}</strong></div>
+                 <div className="pl-col-total"><strong>{formatPLAmount(group.total)}</strong></div>
+               </div>
+             </React.Fragment>
           ))}
+          
+          <div className="pl-row pl-row-highlight" style={{ backgroundColor: 'var(--bg-card)', borderBottom: '2px solid var(--border-color)', borderTop: 'none' }}>
+            <div className="pl-col-account"><strong>Total for Assets</strong></div>
+            <div className="pl-col-total"><strong>{formatPLAmount(totalAssets)}</strong></div>
+          </div>
+
+          <div className="pl-section-heading" style={{ fontSize:'15px', fontWeight:'700', padding:'12px 16px', background:'var(--bg-primary)' }}>Liabilities & Equities</div>
+          
+          {liabilitiesEquitiesGroups.map((group, gIdx) => (
+             <React.Fragment key={`leq-grp-${gIdx}`}>
+               <div className="pl-section-heading" style={{ paddingLeft: '24px', background:'transparent', borderTop: 'none', borderBottom: 'none' }}>{group.groupName}</div>
+               {group.items.map((item, idx) => (
+                 <div key={`leq-item-${gIdx}-${idx}`} className="pl-row">
+                   <div className="pl-col-account pl-indent" style={{ paddingLeft: '48px' }}>{item.name}</div>
+                   <div className="pl-col-total">{formatPLAmount(item.amount)}</div>
+                 </div>
+               ))}
+               <div className="pl-row pl-row-subtotal">
+                 <div className="pl-col-account" style={{ paddingLeft: '24px' }}><strong>Total for {group.groupName}</strong></div>
+                 <div className="pl-col-total"><strong>{formatPLAmount(group.total)}</strong></div>
+               </div>
+             </React.Fragment>
+          ))}
+          
+          <div className="pl-row pl-row-highlight" style={{ backgroundColor: 'var(--bg-card)', borderBottom: '2px solid var(--border-color)', borderTop: 'none' }}>
+            <div className="pl-col-account"><strong>Total for Liabilities & Equities</strong></div>
+            <div className="pl-col-total"><strong>{formatPLAmount(totalLiabilitiesEquities)}</strong></div>
+          </div>
+
         </div>
 
-        {/* Assets vs Liabilities Visual Gauge */}
-        <div style={{ padding: '16px', borderRadius: '10px', border: '1px solid var(--border-color)', background: 'var(--bg-card)', marginBottom: '20px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', fontSize: '12px', fontWeight: '600' }}>
-            <span style={{ color: '#2563eb' }}>Assets — {formatCurrency(totalAssets)}</span>
-            <span style={{ color: '#ef4444' }}>Liabilities — {formatCurrency(totalLiabilities)}</span>
-          </div>
-          <div style={{ height: '10px', borderRadius: '999px', overflow: 'hidden', background: 'rgba(239,68,68,0.2)', display: 'flex' }}>
-            <div style={{
-              width: `${assetPct}%`, height: '100%',
-              background: 'linear-gradient(90deg, #2563eb, #3b82f6)',
-              borderRadius: '999px', transition: 'width 1s cubic-bezier(0.4,0,0.2,1)'
-            }} />
-          </div>
-        </div>
-
-        {/* Breakdown Grid */}
-        <div className="breakdown-grid">
-          <div className="breakdown-card">
-            <h3>Assets</h3>
-            {assets.length === 0 ? (
-              <div className="breakdown-empty">No asset activity for this period</div>
-            ) : (
-              assets.map((item, idx) => {
-                const pct = totalAssets > 0 ? ((item.balance / totalAssets) * 100).toFixed(1) : 0;
-                return (
-                  <div key={idx} style={{ marginBottom: '14px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
-                      <span style={{ fontSize: '13px', color: 'var(--text-primary)', fontWeight: '500' }}>{item.account_name}</span>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>{pct}%</span>
-                        <span style={{ fontSize: '13px', fontWeight: '700', color: '#2563eb' }}>{formatCurrency(item.balance)}</span>
-                      </div>
-                    </div>
-                    <div style={{ height: '6px', background: 'var(--bg-primary)', borderRadius: '999px', overflow: 'hidden' }}>
-                      <div style={{
-                        height: '100%', borderRadius: '999px',
-                        background: 'linear-gradient(90deg, #2563eb, #60a5fa)',
-                        width: `${pct}%`, transition: 'width 0.8s cubic-bezier(0.4,0,0.2,1)'
-                      }} />
-                    </div>
-                  </div>
-                );
-              })
-            )}
-          </div>
-          <div className="breakdown-card">
-            <h3>Liabilities</h3>
-            {liabilities.length === 0 ? (
-              <div className="breakdown-empty">No liabilities for this period</div>
-            ) : (
-              liabilities.map((item, idx) => {
-                const pct = totalLiabilities > 0 ? ((item.balance / totalLiabilities) * 100).toFixed(1) : 0;
-                return (
-                  <div key={idx} style={{ marginBottom: '14px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
-                      <span style={{ fontSize: '13px', color: 'var(--text-primary)', fontWeight: '500' }}>{item.account_name}</span>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>{pct}%</span>
-                        <span style={{ fontSize: '13px', fontWeight: '700', color: '#ef4444' }}>{formatCurrency(item.balance)}</span>
-                      </div>
-                    </div>
-                    <div style={{ height: '6px', background: 'var(--bg-primary)', borderRadius: '999px', overflow: 'hidden' }}>
-                      <div style={{
-                        height: '100%', borderRadius: '999px',
-                        background: 'linear-gradient(90deg, #ef4444, #f87171)',
-                        width: `${pct}%`, transition: 'width 0.8s cubic-bezier(0.4,0,0.2,1)'
-                      }} />
-                    </div>
-                  </div>
-                );
-              })
-            )}
-          </div>
+        {/* Currency Note */}
+        <div className="pl-currency-note">
+          **Amount is displayed in your base currency <span className="pl-currency-badge">INR</span>
         </div>
       </div>
     );
@@ -794,35 +1075,114 @@ const Analytics = () => {
       </div>
 
       {/* Period Filter Tabs & Bank Filter */}
-      <div className="filter-tabs" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', marginBottom: '24px' }}>
-        <div style={{ display: 'flex', gap: '8px' }}>
-          <button
-            className={`filter-tab ${period === 'month' ? 'active' : ''}`}
-            onClick={() => setPeriod('month')}
-          >
-            This Month
-          </button>
-          <button
-            className={`filter-tab ${period === 'quarter' ? 'active' : ''}`}
-            onClick={() => setPeriod('quarter')}
-          >
-            This Quarter
-          </button>
-          <button
-            className={`filter-tab ${period === 'year' ? 'active' : ''}`}
-            onClick={() => setPeriod('year')}
-          >
-            This Year
-          </button>
+      <div className="filter-tabs" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', marginBottom: '24px', flexWrap: 'wrap', gap: '12px' }}>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
           <button
             className={`filter-tab ${period === 'all' ? 'active' : ''}`}
-            onClick={() => setPeriod('all')}
+            onClick={() => {
+              setPeriod('all');
+              setShowCustomPopup(false);
+            }}
           >
             All Time
           </button>
+
+          <div style={{ position: 'relative' }}>
+            <button
+              className={`filter-tab ${period !== 'all' ? 'active' : ''}`}
+              onClick={() => {
+                if (period === 'all') setPeriod('month');
+                setShowCustomPopup(p => !p);
+              }}
+            >
+              Custom
+            </button>
+
+            {showCustomPopup && (
+              <div style={{
+                position: 'absolute',
+                top: '100%',
+                left: 0,
+                marginTop: '8px',
+                background: 'var(--bg-primary, #fff)',
+                border: '1px solid var(--border-color)',
+                borderRadius: '8px',
+                padding: '16px',
+                boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
+                zIndex: 100,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '16px',
+                minWidth: '240px'
+              }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <label style={{ fontSize: '13px', fontWeight: '600', color: 'var(--text-secondary)' }}>Quick Select</label>
+                  <select
+                    value={period}
+                    onChange={(e) => setPeriod(e.target.value)}
+                    style={{
+                      padding: '8px 12px',
+                      borderRadius: '6px',
+                      border: '1px solid var(--border-color)',
+                      background: 'var(--bg-secondary)',
+                      color: 'var(--text-primary)',
+                      fontSize: '14px',
+                      outline: 'none',
+                      cursor: 'pointer',
+                      width: '100%'
+                    }}
+                  >
+                    <option value="month">This Month</option>
+                    <option value="quarter">This Quarter</option>
+                    <option value="year">This FY</option>
+                    <option value="custom">Custom Date Range</option>
+                  </select>
+                </div>
+
+                {period === 'custom' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <label style={{ fontSize: '13px', fontWeight: '600', color: 'var(--text-secondary)' }}>Date Range</label>
+                    <input
+                      type="date"
+                      value={customFrom}
+                      onChange={e => setCustomFrom(e.target.value)}
+                      className="pl-date-input"
+                      style={{ width: '100%' }}
+                    />
+                    <div style={{ textAlign: 'center', fontSize: '12px', color: 'var(--text-secondary)' }}>to</div>
+                    <input
+                      type="date"
+                      value={customTo}
+                      onChange={e => setCustomTo(e.target.value)}
+                      className="pl-date-input"
+                      style={{ width: '100%' }}
+                    />
+                  </div>
+                )}
+
+                <button
+                   onClick={() => setShowCustomPopup(false)}
+                   style={{
+                     padding: '8px',
+                     background: 'var(--primary-color, rgb(27, 85, 226))',
+                     color: '#fff',
+                     border: 'none',
+                     borderRadius: '6px',
+                     cursor: 'pointer',
+                     fontSize: '14px',
+                     fontWeight: '600',
+                     marginTop: '4px',
+                     width: '100%'
+                   }}
+                >
+                  Apply Filters
+                </button>
+              </div>
+            )}
+          </div>
         </div>
         
-        {view === 'pl' && (
+        {(view === 'pl' || view === 'balance') && (
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
             {bankAccounts.length > 0 && (
               <select
@@ -846,25 +1206,27 @@ const Analytics = () => {
                 ))}
               </select>
             )}
-            <label style={{ display: 'flex', alignItems: 'center', gap: '7px', cursor: 'pointer', userSelect: 'none', fontSize: '13px', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
-              <div
-                onClick={() => setIncludePending(p => !p)}
-                style={{
-                  width: '36px', height: '20px', borderRadius: '10px', position: 'relative', cursor: 'pointer',
-                  background: includePending ? '#f59e0b' : 'var(--border-color)',
-                  transition: 'background 0.2s ease', flexShrink: 0
-                }}
-              >
-                <div style={{
-                  position: 'absolute', top: '2px',
-                  left: includePending ? '18px' : '2px',
-                  width: '16px', height: '16px', borderRadius: '50%',
-                  background: '#fff', transition: 'left 0.2s ease',
-                  boxShadow: '0 1px 3px rgba(0,0,0,0.3)'
-                }} />
-              </div>
-              Include Pending
-            </label>
+            {view === 'pl' && (
+              <label style={{ display: 'flex', alignItems: 'center', gap: '7px', cursor: 'pointer', userSelect: 'none', fontSize: '13px', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
+                <div
+                  onClick={() => setIncludePending(p => !p)}
+                  style={{
+                    width: '36px', height: '20px', borderRadius: '10px', position: 'relative', cursor: 'pointer',
+                    background: includePending ? '#f59e0b' : 'var(--border-color)',
+                    transition: 'background 0.2s ease', flexShrink: 0
+                  }}
+                >
+                  <div style={{
+                    position: 'absolute', top: '2px',
+                    left: includePending ? '18px' : '2px',
+                    width: '16px', height: '16px', borderRadius: '50%',
+                    background: '#fff', transition: 'left 0.2s ease',
+                    boxShadow: '0 1px 3px rgba(0,0,0,0.3)'
+                  }} />
+                </div>
+                Include Pending
+              </label>
+            )}
           </div>
         )}
       </div>

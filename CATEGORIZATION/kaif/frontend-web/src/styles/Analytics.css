@@ -354,3 +354,248 @@
     transform: rotate(360deg);
   }
 }
+
+/* ========================= */
+/* P&L Report — Zoho Style   */
+/* ========================= */
+
+.pl-report-container {
+  display: flex;
+  flex-direction: column;
+  max-width: 900px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.pl-projected-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+  padding: 8px 14px;
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: 8px;
+  font-size: 13px;
+  color: #d97706;
+}
+
+.pl-report-header {
+  text-align: center;
+  margin-bottom: 28px;
+  padding-bottom: 16px;
+}
+
+.pl-report-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0 0 6px 0;
+}
+
+.pl-report-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+/* P&L Table */
+.pl-table {
+  background: var(--bg-card, var(--bg-secondary));
+  border: 1px solid var(--glass-border, var(--border-color));
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.pl-table-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 24px;
+  border-bottom: 2px solid var(--glass-border, var(--border-color));
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary, #6b7280);
+  text-transform: uppercase;
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.pl-col-account {
+  flex: 1;
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+.pl-col-total {
+  min-width: 140px;
+  text-align: right;
+  font-size: 14px;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Section Headings */
+.pl-section-heading {
+  padding: 14px 24px 6px 24px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+  border-top: 1px solid var(--glass-border, var(--border-color));
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.pl-section-heading:first-child {
+  border-top: none;
+}
+
+/* Table Rows */
+.pl-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 24px;
+  border-bottom: 1px solid var(--glass-border, var(--border-color));
+  transition: all 0.2s ease;
+  cursor: default;
+}
+
+.pl-row:hover {
+  background: rgba(127, 175, 138, 0.06);
+}
+
+.pl-indent {
+  padding-left: 32px;
+}
+
+/* Add an active transition on the text inside the rows */
+.pl-row .pl-col-account, .pl-row .pl-col-total {
+  transition: all 0.2s ease;
+}
+
+.pl-row:not(.pl-row-empty):hover .pl-col-account {
+  color: var(--accent-color, #7faf8a);
+  transform: translateX(6px);
+}
+
+/* Subtotal Rows */
+.pl-row-subtotal {
+  border-top: 1px solid var(--glass-border, var(--border-color));
+  border-bottom: 1px solid var(--glass-border, var(--border-color));
+  background: rgba(0, 0, 0, 0.02);
+  transition: all 0.2s ease;
+  cursor: default;
+}
+
+.pl-row-subtotal:hover {
+  background: rgba(127, 175, 138, 0.12);
+}
+
+.pl-row-subtotal .pl-col-account,
+.pl-row-subtotal .pl-col-total {
+  font-size: 14px;
+  transition: all 0.2s ease;
+}
+
+.pl-row-subtotal:hover .pl-col-account {
+  color: var(--accent-color, #7faf8a);
+  transform: translateX(6px);
+}
+
+/* Highlight Rows (Gross Profit, Operating Profit) */
+.pl-row-highlight {
+  border-top: 2px solid var(--glass-border, var(--border-color));
+  border-bottom: 2px solid var(--glass-border, var(--border-color));
+  background: rgba(127, 175, 138, 0.06);
+  padding: 12px 24px;
+}
+
+.pl-row-highlight .pl-col-account,
+.pl-row-highlight .pl-col-total {
+  font-size: 15px;
+  color: var(--text-primary);
+}
+
+/* Net Profit/Loss Row */
+.pl-row-net {
+  border-top: 3px double var(--glass-border, var(--border-color));
+  padding: 14px 24px;
+  background: rgba(127, 175, 138, 0.08);
+}
+
+.pl-row-net .pl-col-account {
+  font-size: 16px;
+  color: var(--text-primary);
+}
+
+.pl-net-value {
+  font-size: 16px !important;
+}
+
+.pl-positive {
+  color: #10b981 !important;
+}
+
+.pl-negative {
+  color: #ef4444 !important;
+}
+
+/* Muted text for empty rows */
+.pl-text-muted {
+  color: var(--text-secondary, #6b7280) !important;
+  opacity: 0.5;
+}
+
+.pl-row-empty {
+  border-bottom: none;
+}
+
+/* Currency Note */
+.pl-currency-note {
+  margin-top: 20px;
+  padding: 0 4px;
+  font-size: 12px;
+  color: var(--text-secondary, #6b7280);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pl-currency-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  background: rgba(59, 130, 246, 0.15);
+  color: #3b82f6;
+  letter-spacing: 0.05em;
+}
+
+/* Custom Date Inputs */
+.pl-date-input {
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--glass-border, var(--border-color));
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 13px;
+  outline: none;
+  cursor: pointer;
+  font-family: inherit;
+  transition: border-color 0.2s ease;
+}
+
+.pl-date-input:focus {
+  border-color: var(--accent-color);
+}
+
+.pl-date-input::-webkit-calendar-picker-indicator {
+  filter: invert(0.5);
+  cursor: pointer;
+}
