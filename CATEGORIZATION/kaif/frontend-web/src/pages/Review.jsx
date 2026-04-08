@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
-import { Check, Code, FileSearch, Building2, Cpu, Loader2, ChevronLeft, CheckCircle, Download, Link, ScrollText, Trash2, Plus, RotateCcw, AlertCircle, Info } from "lucide-react";
+import { Check, Code, FileSearch, Building2, Cpu, Loader2, ChevronLeft, CheckCircle, Download, Link, ScrollText, Trash2, Plus, RotateCcw, AlertCircle, Info, X, Building, CreditCard, ChevronDown } from "lucide-react";
 import API from "../api/api";
 import { useParsing } from "../context/ParsingContext";
 
@@ -142,6 +142,20 @@ export default function ReviewPage() {
     const [retryNote, setRetryNote] = useState("");
     const [isRetrying, setIsRetrying] = useState(false);
 
+    // Add Account Modal State
+    const [isAddAccountModalOpen, setIsAddAccountModalOpen] = useState(false);
+    const [isAddingAccount, setIsAddingAccount] = useState(false);
+    const [isAccountDropdownOpen, setIsAccountDropdownOpen] = useState(false);
+    const accountDropdownRef = useRef(null);
+    const [newAccountForm, setNewAccountForm] = useState({
+        type: 'BANK',
+        institution_name: '',
+        account_name: '',
+        last4: '',
+        ifsc_code: '',
+        card_network: 'VISA'
+    });
+
     useEffect(() => {
         if (!documentId) {
             setIsLoading(false);
@@ -197,8 +211,22 @@ export default function ReviewPage() {
         }
     };
 
+    useEffect(() => {
+        const handleClickOutside = (event) => {
+            if (accountDropdownRef.current && !accountDropdownRef.current.contains(event.target)) {
+                setIsAccountDropdownOpen(false);
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, []);
+
     const handleLinkAccount = async () => {
         if (!selectedAccountId) return;
+        if (selectedAccountId === "ADD_NEW") {
+            setIsAddAccountModalOpen(true);
+            return;
+        }
         setIsLinkingAccount(true);
         try {
             await API.post(`/documents/${documentId}/select-account`, { account_id: selectedAccountId });
@@ -208,6 +236,42 @@ export default function ReviewPage() {
             alert("Failed to link account: " + (err.response?.data?.detail || err.message));
         } finally {
             setIsLinkingAccount(false);
+        }
+    };
+
+    const handleCreateAccount = async () => {
+        if (!newAccountForm.institution_name || !newAccountForm.last4) {
+            alert("Please fill in Institution Name and Last 4 digits.");
+            return;
+        }
+        if (newAccountForm.last4.length !== 4) {
+            alert("Last 4 digits must be exactly 4 numbers.");
+            return;
+        }
+
+        setIsAddingAccount(true);
+        try {
+            const res = await API.post("/documents/accounts", newAccountForm);
+            const createdAcc = res.data;
+            
+            // Add to the list and select it
+            setUserAccounts(prev => [...prev, createdAcc].sort((a,b) => a.institution_name.localeCompare(b.institution_name)));
+            setSelectedAccountId(createdAcc.account_id);
+            setAccountLinked(false); // Make user click "Link" or auto-link? 
+            
+            // Close modal
+            setIsAddAccountModalOpen(false);
+            setNewAccountForm({ type: 'BANK', institution_name: '', account_name: '', last4: '', ifsc_code: '', card_network: 'VISA' });
+            
+            // Auto-link newly created account
+            await API.post(`/documents/${documentId}/select-account`, { account_id: createdAcc.account_id });
+            setAccountLinked(true);
+            
+        } catch (err) {
+            console.error(err);
+            alert("Failed to create account: " + (err.response?.data?.detail || err.message));
+        } finally {
+            setIsAddingAccount(false);
         }
     };
 
@@ -628,7 +692,7 @@ export default function ReviewPage() {
                                 transition: 'all 0.2s'
                             }}
                         >
-                            <RotateCcw size={15} /> Retry extraction <span style={{ background: '#f39c12', color: 'white', padding: '1px 6px', borderRadius: '10px', fontSize: '10px' }}>new</span>
+                            <RotateCcw size={15} /> Retry extraction
                         </button>
                     )}
 
@@ -721,33 +785,115 @@ export default function ReviewPage() {
                     <label style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '4px', marginBottom: '8px', textTransform: 'uppercase' }}>
                         <Link size={12} /> Target Account for Transactions
                     </label>
-                    <div style={{ display: 'flex', gap: '0.75rem' }}>
-                        <select
-                            value={selectedAccountId || ""}
-                            onChange={e => {
-                                setSelectedAccountId(Number(e.target.value) || null);
-                                setAccountLinked(false);
-                            }}
-                            disabled={isApproved}
+                    <div style={{ display: 'flex', gap: '0.75rem', position: 'relative' }} ref={accountDropdownRef}>
+                        <div 
+                            onClick={() => !isApproved && setIsAccountDropdownOpen(!isAccountDropdownOpen)}
                             style={{
                                 flex: 1,
-                                padding: '0.6rem',
+                                padding: '0.6rem 1rem',
                                 fontSize: '0.85rem',
                                 fontWeight: 700,
-                                color: 'var(--text-primary)',
+                                color: selectedAccountId ? 'var(--text-primary)' : 'var(--text-secondary)',
                                 border: '1.5px solid var(--border-color)',
                                 borderRadius: '10px',
                                 background: 'var(--input-bg)',
                                 cursor: isApproved ? 'not-allowed' : 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                gap: '10px',
+                                minWidth: '220px'
                             }}
                         >
-                            <option value="">— Select destination account —</option>
-                            {userAccounts.map(acct => (
-                                <option key={acct.account_id} value={acct.account_id}>
-                                    {acct.institution_name} ••••{acct.account_number_last4 || acct.card_last4}
-                                </option>
-                            ))}
-                        </select>
+                            <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                {selectedAccountId 
+                                    ? userAccounts.find(a => a.account_id === selectedAccountId)?.institution_name + " \u2022\u2022\u2022\u2022" + (userAccounts.find(a => a.account_id === selectedAccountId)?.account_number_last4 || userAccounts.find(a => a.account_id === selectedAccountId)?.card_last4)
+                                    : "\u2014 Select destination account \u2014"}
+                            </span>
+                            <ChevronDown size={16} />
+                        </div>
+
+                        {isAccountDropdownOpen && (
+                            <div style={{
+                                position: 'absolute',
+                                top: '100%',
+                                left: 0,
+                                right: 0,
+                                transform: 'translateY(10px)',
+                                background: 'var(--bg-secondary)',
+                                border: '1px solid var(--glass-border)',
+                                borderRadius: '16px',
+                                boxShadow: '0 20px 40px rgba(0,0,0,0.3)',
+                                zIndex: 1000,
+                                overflow: 'hidden',
+                                padding: '8px'
+                            }}>
+                                <div style={{ maxHeight: '250px', overflowY: 'auto', marginBottom: '8px' }}>
+                                    {userAccounts.length === 0 && (
+                                        <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
+                                            No accounts found.
+                                        </div>
+                                    )}
+                                    {userAccounts.map(acct => (
+                                        <div 
+                                            key={acct.account_id}
+                                            onClick={() => {
+                                                setSelectedAccountId(acct.account_id);
+                                                setAccountLinked(false);
+                                                setIsAccountDropdownOpen(false);
+                                            }}
+                                            style={{
+                                                padding: '10px 14px',
+                                                borderRadius: '10px',
+                                                cursor: 'pointer',
+                                                fontSize: '0.85rem',
+                                                fontWeight: 600,
+                                                background: selectedAccountId === acct.account_id ? 'rgba(72, 62, 168, 0.08)' : 'transparent',
+                                                color: selectedAccountId === acct.account_id ? 'var(--primary-action)' : 'var(--text-primary)',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                gap: '10px',
+                                                transition: 'all 0.15s'
+                                            }}
+                                            onMouseOver={e => e.currentTarget.style.background = 'rgba(72, 62, 168, 0.05)'}
+                                            onMouseOut={e => e.currentTarget.style.background = selectedAccountId === acct.account_id ? 'rgba(72, 62, 168, 0.08)' : 'transparent'}
+                                        >
+                                            {acct.card_last4 ? <CreditCard size={14} /> : <Building size={14} />}
+                                            <span>{acct.institution_name} <span style={{ opacity: 0.6, fontSize: '0.75rem', fontWeight: 500 }}>&bull;&bull;&bull;&bull;{acct.account_number_last4 || acct.card_last4}</span></span>
+                                        </div>
+                                    ))}
+                                </div>
+                                <div style={{ padding: '8px', borderTop: '1px solid var(--border-color)', paddingTop: '12px' }}>
+                                    <button 
+                                        onClick={() => {
+                                            setIsAddAccountModalOpen(true);
+                                            setIsAccountDropdownOpen(false);
+                                        }}
+                                        style={{ 
+                                            display: 'flex', 
+                                            alignItems: 'center', 
+                                            gap: '8px', 
+                                            padding: '0.6rem', 
+                                            background: 'none', 
+                                            border: '1.5px dashed var(--primary-action)', 
+                                            borderRadius: '10px', 
+                                            color: 'var(--primary-action)', 
+                                            fontSize: '0.8rem', 
+                                            fontWeight: 700, 
+                                            cursor: 'pointer',
+                                            transition: 'all 0.2s',
+                                            width: '100%',
+                                            justifyContent: 'center'
+                                        }}
+                                        onMouseOver={e => e.currentTarget.style.background = 'rgba(72, 62, 168, 0.05)'}
+                                        onMouseOut={e => e.currentTarget.style.background = 'none'}
+                                    >
+                                        <Plus size={16} /> Add New Bank Account
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+
                         {!accountLinked && (
                             <button
                                 id="review-link-btn"
@@ -952,6 +1098,110 @@ export default function ReviewPage() {
                             >
                                 {isRetrying ? <Loader2 size={18} className="spin-icon" /> : <RotateCcw size={18} />}
                                 START RETRY
+                            </button>
+                        </div>
+                    </motion.div>
+                </div>
+            )}
+            {/* Add Account Modal */}
+            {isAddAccountModalOpen && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(10px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 12000 }}>
+                    <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} style={{ background: 'var(--bg-secondary)', padding: '2.5rem', borderRadius: '24px', border: '1px solid var(--glass-border)', maxWidth: '500px', width: '90%', boxShadow: '0 25px 60px -12px rgba(0,0,0,0.4)', color: 'var(--text-primary)' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+                            <h3 style={{ fontSize: '1.25rem', fontWeight: 800, margin: 0 }}>Add Account</h3>
+                            <button onClick={() => setIsAddAccountModalOpen(false)} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}><X size={20} /></button>
+                        </div>
+
+                        <div style={{ display: 'flex', gap: '8px', marginBottom: '1.5rem' }}>
+                            <button 
+                                onClick={() => setNewAccountForm(p => ({ ...p, type: 'BANK' }))}
+                                style={{ flex: 1, padding: '10px', borderRadius: '10px', border: `2px solid ${newAccountForm.type === 'BANK' ? 'var(--primary-action)' : 'var(--border-color)'}`, background: newAccountForm.type === 'BANK' ? 'rgba(72,62,168,0.05)' : 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', fontWeight: 700, fontSize: '0.85rem' }}
+                            >
+                                <Building size={16} /> Bank
+                            </button>
+                            <button 
+                                onClick={() => setNewAccountForm(p => ({ ...p, type: 'CREDIT_CARD' }))}
+                                style={{ flex: 1, padding: '10px', borderRadius: '10px', border: `2px solid ${newAccountForm.type === 'CREDIT_CARD' ? 'var(--primary-action)' : 'var(--border-color)'}`, background: newAccountForm.type === 'CREDIT_CARD' ? 'rgba(72,62,168,0.05)' : 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', fontWeight: 700, fontSize: '0.85rem' }}
+                            >
+                                <CreditCard size={16} /> Credit Card
+                            </button>
+                        </div>
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', marginBottom: '2rem' }}>
+                            <div style={{ padding: '12px', background: 'rgba(72, 62, 168, 0.05)', border: '1px solid rgba(72, 62, 168, 0.1)', borderRadius: '12px' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                                    <Info size={16} color="var(--primary-action)" />
+                                    <span style={{ fontWeight: 800, fontSize: '0.85rem' }}>Account Identifier</span>
+                                </div>
+                                <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', margin: 0 }}>Add details to help match uploaded statements.</p>
+                            </div>
+
+                            <div className="form-group">
+                                <label style={{ fontSize: '0.8rem', fontWeight: 700, display: 'block', marginBottom: '6px' }}>Institution / Bank Name *</label>
+                                <input 
+                                    type="text" 
+                                    className="form-input" 
+                                    placeholder="e.g. HDFC, SBI"
+                                    value={newAccountForm.institution_name}
+                                    onChange={e => setNewAccountForm(p => ({ ...p, institution_name: e.target.value }))}
+                                    style={{ width: '100%', padding: '0.75rem', borderRadius: '10px', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-primary)', outline: 'none' }}
+                                />
+                            </div>
+
+                            <div style={{ display: 'flex', gap: '1rem' }}>
+                                <div style={{ flex: 1 }}>
+                                    <label style={{ fontSize: '0.8rem', fontWeight: 700, display: 'block', marginBottom: '6px' }}>Last 4 Digits *</label>
+                                    <input 
+                                        type="text" 
+                                        maxLength={4}
+                                        placeholder="e.g. 1234"
+                                        value={newAccountForm.last4}
+                                        onChange={e => setNewAccountForm(p => ({ ...p, last4: e.target.value.replace(/\D/g, '') }))}
+                                        style={{ width: '100%', padding: '0.75rem', borderRadius: '10px', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-primary)', outline: 'none' }}
+                                    />
+                                </div>
+                                {newAccountForm.type === 'BANK' ? (
+                                    <div style={{ flex: 1 }}>
+                                        <label style={{ fontSize: '0.8rem', fontWeight: 700, display: 'block', marginBottom: '6px' }}>IFSC Code</label>
+                                        <input 
+                                            type="text" 
+                                            placeholder="e.g. HDFC0001234"
+                                            value={newAccountForm.ifsc_code}
+                                            onChange={e => setNewAccountForm(p => ({ ...p, ifsc_code: e.target.value.toUpperCase() }))}
+                                            style={{ width: '100%', padding: '0.75rem', borderRadius: '10px', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-primary)', outline: 'none' }}
+                                        />
+                                    </div>
+                                ) : (
+                                    <div style={{ flex: 1 }}>
+                                        <label style={{ fontSize: '0.8rem', fontWeight: 700, display: 'block', marginBottom: '6px' }}>Network</label>
+                                        <select 
+                                            value={newAccountForm.card_network}
+                                            onChange={e => setNewAccountForm(p => ({ ...p, card_network: e.target.value }))}
+                                            style={{ width: '100%', padding: '0.75rem', borderRadius: '10px', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-primary)', outline: 'none' }}
+                                        >
+                                            <option value="VISA">Visa</option>
+                                            <option value="MASTERCARD">Mastercard</option>
+                                            <option value="AMEX">Amex</option>
+                                            <option value="OTHER">Other</option>
+                                        </select>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        <div style={{ display: 'flex', gap: '1rem' }}>
+                            <button 
+                                onClick={() => setIsAddAccountModalOpen(false)}
+                                style={{ flex: 1, padding: '0.875rem', borderRadius: '12px', border: '1px solid var(--border-color)', background: 'none', color: 'var(--text-secondary)', fontWeight: 700, cursor: 'pointer' }}
+                            >
+                                Cancel
+                            </button>
+                            <button 
+                                onClick={handleCreateAccount}
+                                disabled={isAddingAccount || !newAccountForm.institution_name || newAccountForm.last4.length !== 4}
+                                style={{ flex: 1.5, padding: '0.875rem', borderRadius: '12px', border: 'none', background: 'var(--primary-action)', color: 'white', fontWeight: 800, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', opacity: (isAddingAccount || !newAccountForm.institution_name || newAccountForm.last4.length !== 4) ? 0.6 : 1 }}
+                            >
+                                {isAddingAccount ? <Loader2 size={18} className="spin-icon" /> : 'Add Account'}
                             </button>
                         </div>
                     </motion.div>

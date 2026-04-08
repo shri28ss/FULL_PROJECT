@@ -12,7 +12,7 @@ import uuid
 import hashlib
 from typing import Optional
 from db.connection import get_client, make_client, set_thread_client, clear_thread_client
-from services.account_detector import get_user_accounts, link_document_to_account
+from services.account_detector import get_user_accounts, link_document_to_account, create_user_account
 from auth.utils import get_current_user
 
 logger = logging.getLogger("ledgerai.document_routes")
@@ -460,6 +460,29 @@ class ApprovalRequest(BaseModel):
 class RetryRequest(BaseModel):
     method: str  # "CODE", "VISION", "MANUAL"
     note: Optional[str] = None
+
+
+class CreateAccountRequest(BaseModel):
+    institution_name: str
+    account_name: Optional[str] = None
+    type: str  # "BANK" or "CREDIT_CARD"
+    last4: str
+    ifsc_code: Optional[str] = None
+    card_network: Optional[str] = None
+
+
+@router.post("/accounts")
+async def add_new_account(
+    body: CreateAccountRequest,
+    user=Depends(get_current_user)
+):
+    user_id = user["user_id"]
+    try:
+        new_account = create_user_account(user_id, body.dict())
+        return new_account
+    except Exception as e:
+        logger.error(f"Failed to add account: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/{document_id}/retry")
