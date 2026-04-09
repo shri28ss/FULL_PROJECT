@@ -79,6 +79,7 @@ const Transactions = () => {
   const [activeFilter, setActiveFilter] = useState('ALL');
   const [recatTarget, setRecatTarget] = useState(null);
   const [manualTarget, setManualTarget] = useState(null);
+  const [srcAccTarget, setSrcAccTarget] = useState(null);
   const [approvingIds, setApprovingIds] = useState(new Set());
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [correctingId, setCorrectingId] = useState(null);
@@ -101,6 +102,56 @@ const Transactions = () => {
   const [txnTypeFilter, setTxnTypeFilter] = useState('ALL'); // 'ALL' | 'DEBIT' | 'CREDIT'
   const [searchQuery, setSearchQuery] = useState('');
   const [dateSortOrder, setDateSortOrder] = useState('desc'); // 'asc' | 'desc'
+  
+  // ── Date Range popup state ────────────────────────────────────
+  const [isDatePopupOpen, setIsDatePopupOpen] = useState(false);
+  const datePopupRef = useRef(null);
+  const [dateRange, setDateRange] = useState({ start: '', end: '' });
+
+  const toLocalISO = (d) => {
+    const tzoffset = d.getTimezoneOffset() * 60000; // offset in milliseconds
+    return new Date(d - tzoffset).toISOString().split('T')[0];
+  };
+
+  const setQuickDate = (option) => {
+    const today = new Date();
+    let start = '';
+    let end = toLocalISO(today);
+
+    if (option === '7D') {
+      const d = new Date(today);
+      d.setDate(today.getDate() - 7);
+      start = toLocalISO(d);
+    } else if (option === '30D') {
+      const d = new Date(today);
+      d.setDate(today.getDate() - 30);
+      start = toLocalISO(d);
+    } else if (option === 'THIS_MONTH') {
+      const d = new Date(today.getFullYear(), today.getMonth(), 1);
+      start = toLocalISO(d);
+    } else if (option === 'LAST_MONTH') {
+      const dStart = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+      const dEnd = new Date(today.getFullYear(), today.getMonth(), 0);
+      start = toLocalISO(dStart);
+      end = toLocalISO(dEnd);
+    } else if (option === 'THIS_YEAR') {
+      const d = new Date(today.getFullYear(), 0, 1);
+      start = toLocalISO(d);
+    } else if (option === 'LAST_FY') {
+      const currentYear = today.getFullYear();
+      let startYear = currentYear - 1;
+      let endYear = currentYear;
+      if (today.getMonth() < 3) { // Jan-Mar (0-2)
+          startYear = currentYear - 2;
+          endYear = currentYear - 1;
+      }
+      const dStart = new Date(startYear, 3, 1); // April 1st
+      const dEnd = new Date(endYear, 2, 31); // March 31st
+      start = toLocalISO(dStart);
+      end = toLocalISO(dEnd);
+    }
+    setDateRange({ start, end });
+  };
 
   const fetchTransactions = async (currentFilter = activeFilter, silent = false) => {
     if (!silent) setLoading(true);
@@ -217,11 +268,14 @@ const Transactions = () => {
     loadAllAccounts();
   }, []);
 
-  // Close filter popup on outside click
+  // Close popups on outside click
   useEffect(() => {
     const handleClickOutside = (e) => {
       if (filterRef.current && !filterRef.current.contains(e.target)) {
         setIsFilterOpen(false);
+      }
+      if (datePopupRef.current && !datePopupRef.current.contains(e.target)) {
+        setIsDatePopupOpen(false);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -534,6 +588,47 @@ const Transactions = () => {
     })();
   };
 
+  const handleChangeSourceAccount = (selectedAccount) => {
+    const uncatId = srcAccTarget.uncategorized_transaction_id;
+    const prevTxn = transactions.find(t => t.uncategorized_transaction_id === uncatId);
+    setSrcAccTarget(null);
+    updateTxnInState(uncatId, txn => ({
+      ...txn,
+      account_id: selectedAccount.account_id,
+      source_account: { account_id: selectedAccount.account_id, account_name: selectedAccount.account_name },
+      transactions: txn.transactions?.length > 0 ? [{
+        ...txn.transactions[0],
+        base_account_id: selectedAccount.account_id
+      }] : txn.transactions
+    }));
+    
+    (async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        const response = await fetch(`${API_BASE_URL}/api/transactions/${uncatId}/source-account`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session?.access_token || ''}`
+          },
+          body: JSON.stringify({ account_id: selectedAccount.account_id })
+        });
+        if (!response.ok) {
+          const data = await response.json();
+          showToast(data.error || 'Failed to update source account — reverted', 'error');
+          if (prevTxn) setTransactions(p => p.map(t =>
+            t.uncategorized_transaction_id === uncatId ? prevTxn : t
+          ));
+        }
+      } catch {
+        showToast('Failed to update source account — reverted', 'error');
+        if (prevTxn) setTransactions(p => p.map(t =>
+          t.uncategorized_transaction_id === uncatId ? prevTxn : t
+        ));
+      }
+    })();
+  };
+
   const handleSimilarBulkConfirm = async () => {
     setIsApprovingSimilar(true);
     try {
@@ -656,10 +751,16 @@ const Transactions = () => {
     })();
   };
 
-  // Transactions after secondary filters only (account / doc / type / search)
-  // used to compute per-tab counts that react to applied filters.
   const secondaryFiltered = transactions.filter((txn) => {
     const isCategorised = txn.transactions && txn.transactions.length > 0;
+    
+    // Date Range Filter
+    if (dateRange.start || dateRange.end) {
+      const tDate = txn.txn_date.split('T')[0];
+      if (dateRange.start && tDate < dateRange.start) return false;
+      if (dateRange.end && tDate > dateRange.end) return false;
+    }
+
     if (selectedAccountIds.size > 0 && !selectedAccountIds.has(txn.account_id)) return false;
     if (selectedDocIds.size > 0 && !selectedDocIds.has(txn.document_id)) return false;
     if (txnTypeFilter === 'DEBIT' && !(txn.debit > 0)) return false;
@@ -861,6 +962,69 @@ const Transactions = () => {
           />
         </div>
 
+        {/* ── Date Range Popup ── */}
+        <div className="filter-popup-wrapper" ref={datePopupRef} style={{ marginLeft: '4px' }}>
+          <button
+            className={`filter-tab ${(dateRange.start || dateRange.end) ? 'filter-tab-active' : ''}`}
+            onClick={() => setIsDatePopupOpen(v => !v)}
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+            Date
+            {(dateRange.start || dateRange.end) && (
+              <span className="filter-count-badge">1</span>
+            )}
+          </button>
+
+          {isDatePopupOpen && (
+            <div className="filter-popup" style={{ width: '280px' }}>
+              <div className="filter-popup-header">
+                <span>Date Range</span>
+                {(dateRange.start || dateRange.end) && (
+                  <button className="filter-clear-btn" onClick={() => { setDateRange({start: '', end: ''}); setIsDatePopupOpen(false); }}>Clear</button>
+                )}
+              </div>
+              
+              <div className="filter-group">
+                <div className="filter-group-label" style={{ marginBottom: '8px' }}>Quick Select</div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', padding: '0 12px 8px' }}>
+                  <button className="filter-tab" style={{ justifyContent: 'center' }} onClick={() => setQuickDate('7D')}>Last 7 Days</button>
+                  <button className="filter-tab" style={{ justifyContent: 'center' }} onClick={() => setQuickDate('30D')}>Last 30 Days</button>
+                  <button className="filter-tab" style={{ justifyContent: 'center' }} onClick={() => setQuickDate('THIS_MONTH')}>This Month</button>
+                  <button className="filter-tab" style={{ justifyContent: 'center' }} onClick={() => setQuickDate('LAST_MONTH')}>Last Month</button>
+                  <button className="filter-tab" style={{ justifyContent: 'center' }} onClick={() => setQuickDate('THIS_YEAR')}>This Year</button>
+                  <button className="filter-tab" style={{ justifyContent: 'center' }} onClick={() => setQuickDate('LAST_FY')}>Last FY</button>
+                </div>
+              </div>
+
+              <div className="filter-group">
+                <div className="filter-group-label" style={{ marginBottom: '8px' }}>Custom Range</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '0 12px 6px' }}>
+                  <div>
+                    <label style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.4px', fontWeight: 'bold' }}>Start Date</label>
+                    <input 
+                      type="date" 
+                      className="amount-editor-input" 
+                      style={{ height: '36px' }}
+                      value={dateRange.start}
+                      onChange={e => setDateRange(p => ({ ...p, start: e.target.value }))}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.4px', fontWeight: 'bold' }}>End Date</label>
+                    <input 
+                      type="date" 
+                      className="amount-editor-input" 
+                      style={{ height: '36px' }}
+                      value={dateRange.end}
+                      onChange={e => setDateRange(p => ({ ...p, end: e.target.value }))}
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
         {/* ── Filter popup ── */}
         <div className="filter-popup-wrapper" ref={filterRef} style={{ marginLeft: '4px' }}>
           <button
@@ -1015,7 +1179,14 @@ const Transactions = () => {
                               <div>{new Date(txn.txn_date).toLocaleDateString()}</div>
                               <div className="details-cell">{txn.details}</div>
                               {renderAmountCell(txn)}
-                              <div>{txn.source_account?.account_name || '-'}</div>
+                              <div
+                                className="account-cell-clickable"
+                                onClick={() => setSrcAccTarget(txn)}
+                                style={{ cursor: 'pointer' }}
+                                title="Click to change base account"
+                              >
+                                {txn.source_account?.account_name || '-'}
+                              </div>
                               <div
                                 className={txn.transactions[0].accounts ? 'account-cell-clickable' : ''}
                                 onClick={() => { if (txn.transactions[0].accounts) setRecatTarget(txn); }}
@@ -1117,7 +1288,14 @@ const Transactions = () => {
                         <div>{new Date(txn.txn_date).toLocaleDateString()}</div>
                         <div className="details-cell">{txn.details}</div>
                         {renderAmountCell(txn)}
-                        <div>{txn.source_account?.account_name || '-'}</div>
+                        <div
+                          className="account-cell-clickable"
+                          onClick={() => setSrcAccTarget(txn)}
+                          style={{ cursor: 'pointer' }}
+                          title="Click to change base account"
+                        >
+                          {txn.source_account?.account_name || '-'}
+                        </div>
                         <div
                           className={
                             isCategorised && txn.transactions[0].accounts
@@ -1303,6 +1481,16 @@ const Transactions = () => {
           onSelect={handleManualCategorize}
           transactionDirection={manualTarget.debit > 0 ? 'DEBIT' : 'CREDIT'}
           preloadedAccounts={cachedAccounts}
+          onAccountCreated={handleAccountCreated}
+        />
+      )}
+      {srcAccTarget && (
+        <AccountPickerModal
+          onClose={() => setSrcAccTarget(null)}
+          onSelect={handleChangeSourceAccount}
+          currentAccountId={srcAccTarget.account_id}
+          preloadedAccounts={cachedAccounts}
+          allowedParentAccountNames={['Bank Accounts', 'Credit Cards']}
           onAccountCreated={handleAccountCreated}
         />
       )}

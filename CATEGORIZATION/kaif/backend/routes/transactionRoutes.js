@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { processUpload } = require('../controllers/bulkController');
 const { bulkUploadStatements } = require('../controllers/uploadController');
-const { recategorizeTransaction, approveTransaction, bulkApproveTransactions, manualCategorizeTransaction, correctTransaction } = require('../controllers/transactionController');
+const { recategorizeTransaction, approveTransaction, bulkApproveTransactions, manualCategorizeTransaction, correctTransaction, updateSourceAccount } = require('../controllers/transactionController');
 const authMiddleware = require('../middleware/authMiddleware');
 
 // 🛡️ Route: POST /upload-bulk
@@ -37,5 +37,9 @@ router.post('/manual-categorize', authMiddleware, manualCategorizeTransaction);
 // Deletes ledger_entries + transactions, resets uncategorized_transaction to PENDING.
 // Body: { amount?: number, transaction_type?: 'DEBIT' | 'CREDIT' }
 router.patch('/:uncategorized_transaction_id/correct', authMiddleware, correctTransaction);
+// 🛡️ Route: PATCH /:uncategorized_transaction_id/source-account
+// Updates the source account for a specific uncategorized transaction
+// Body: { account_id: id }
+router.patch('/:uncategorized_transaction_id/source-account', authMiddleware, updateSourceAccount);
 
 module.exports = router;

@@ -11,6 +11,7 @@ const AccountPickerModal = ({
   currentAccountId, 
   transactionDirection = null,
   preloadedAccounts = null,
+  allowedParentAccountNames = null,
   onAccountCreated
 }) => {
   const [accounts, setAccounts] = useState([]);
@@ -95,12 +96,15 @@ const AccountPickerModal = ({
   // Group and filter accounts
   const groupedAccounts = () => {
     const grouped = {};
+    let filteredList = accounts;
 
-    // TODO: temporarily disabled — re-enable when balance_nature data is reliable
-    // const filteredList = allowedBalanceNature
-    //   ? accounts.filter(a => a.balance_nature === allowedBalanceNature)
-    //   : accounts;
-    const filteredList = accounts;
+    if (allowedParentAccountNames && allowedParentAccountNames.length > 0) {
+      const allowedParentIds = accounts
+        .filter(a => allowedParentAccountNames.includes(a.account_name))
+        .map(a => a.account_id);
+      
+      filteredList = accounts.filter(a => a.parent_account_id && allowedParentIds.includes(a.parent_account_id));
+    }
 
     filteredList.forEach((account) => {
       if (!grouped[account.account_type]) {

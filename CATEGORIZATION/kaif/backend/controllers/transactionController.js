@@ -742,11 +742,75 @@ async function correctTransaction(req, res) {
     return res.status(500).json({ error: 'Internal server error.' });
   }
 }
+/**
+ * updateSourceAccount(req, res)
+ * Updates the base account (source_account) of an uncategorized transaction.
+ * If the transaction is already categorized, it checks if it is POSTED and errors if so.
+ * Otherwise it also updates the transactions.base_account_id.
+ */
+async function updateSourceAccount(req, res) {
+  try {
+    const { uncategorized_transaction_id } = req.params;
+    const { account_id } = req.body;
+    const userId = req.user?.id;
+
+    if (!userId) {
+      return res.status(401).json({ error: 'User authentication failed.' });
+    }
+
+    if (!uncategorized_transaction_id || !account_id) {
+      return res.status(400).json({ error: 'Missing uncategorized_transaction_id or account_id.' });
+    }
+
+    // Check if we can change it. 
+    // Guard: Block edits on POSTED transactions
+    const { data: existingTxns, error: fetchError } = await supabase
+      .from('transactions')
+      .select('transaction_id, posting_status')
+      .eq('uncategorized_transaction_id', uncategorized_transaction_id)
+      .eq('user_id', userId);
+
+    if (existingTxns && existingTxns.length > 0) {
+      const posted = existingTxns.some(t => t.posting_status === 'POSTED');
+      if (posted) {
+        return res.status(403).json({ error: 'Cannot edit base account of a POSTED transaction.' });
+      }
+
+      // Update base_account_id in transactions
+      const { error: txnUpdateError } = await supabase
+        .from('transactions')
+        .update({ base_account_id: account_id })
+        .eq('uncategorized_transaction_id', uncategorized_transaction_id)
+        .eq('user_id', userId);
+        
+      if (txnUpdateError) {
+        return res.status(500).json({ error: 'Failed to update transaction base account.' });
+      }
+    }
+
+    // Update account_id in uncategorized_transactions
+    const { error: uncatUpdateError } = await supabase
+      .from('uncategorized_transactions')
+      .update({ account_id: account_id })
+      .eq('uncategorized_transaction_id', uncategorized_transaction_id)
+      .eq('user_id', userId);
+
+    if (uncatUpdateError) {
+      return res.status(500).json({ error: 'Failed to update source transaction account.' });
+    }
+
+    return res.status(200).json({ success: true });
+  } catch (err) {
+    console.error('Unexpected error in updateSourceAccount:', err);
+    return res.status(500).json({ error: 'Internal server error.' });
+  }
+}
 
 module.exports = {
   recategorizeTransaction,
   approveTransaction,
   bulkApproveTransactions,
   manualCategorizeTransaction,
-  correctTransaction
+  correctTransaction,
+  updateSourceAccount
 };
