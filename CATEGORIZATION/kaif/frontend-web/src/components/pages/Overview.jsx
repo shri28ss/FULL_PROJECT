@@ -15,10 +15,16 @@ const Overview = () => {
   const [activeDonutIndex, setActiveDonutIndex] = useState(null);
   const [breakdownModal, setBreakdownModal] = useState({ isOpen: false, type: null, data: [] });
   const [categoryTxnModal, setCategoryTxnModal] = useState({ isOpen: false, categoryName: '', txns: [] });
+  // Ledger-based asset/liability state — computed identically to Analytics Balance Sheet
+  const [assetsLedger, setAssetsLedger] = useState({ total: 0, breakdown: [] });
+  const [liabilitiesLedger, setLiabilitiesLedger] = useState({ total: 0, breakdown: [] });
 
   const handleStatClick = (type) => {
     if (type === 'INCOME') setBreakdownModal({ isOpen: true, type: 'Income Breakdown', data: incomeBreakdown });
     else if (type === 'EXPENSE') setBreakdownModal({ isOpen: true, type: 'Expense Breakdown', data: expenseBreakdown });
+    // Assets/Liabilities use ledger-based breakdown (matches Analytics Balance Sheet)
+    else if (type === 'ASSETS') setBreakdownModal({ isOpen: true, type: 'Total Assets Breakdown', data: assetsLedger.breakdown });
+    else if (type === 'LIABILITIES') setBreakdownModal({ isOpen: true, type: 'Total Liabilities Breakdown', data: liabilitiesLedger.breakdown });
     else if (type === 'SAVINGS' || type === 'BALANCE') {
       setBreakdownModal({
         isOpen: true,
@@ -40,6 +46,7 @@ const Overview = () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
+      // ── 1. Fetch uncategorized_transactions for P&L widgets (income / expense / chart) ──
       const { data, error } = await supabase
         .from('uncategorized_transactions')
         .select(`
@@ -74,6 +81,88 @@ const Overview = () => {
       });
       setAccounts(Object.keys(accsMap).map(id => ({ id, name: accsMap[id] })));
 
+      // ── 2. Fetch ledger_entries for Assets & Liabilities ─────────────────────────────
+      // Cumulative fetch (no .gte filter) to get the actual account balances.
+      const { data: ledgerEntries } = await supabase
+        .from('ledger_entries')
+        .select(`
+          debit_amount,
+          credit_amount,
+          account:account_id (
+            account_id,
+            account_name,
+            account_type,
+            balance_nature
+          )
+        `)
+        .eq('user_id', user.id);
+
+      // Accumulate debit/credit per account
+      const ledgerMap = {};
+      (ledgerEntries || []).forEach(entry => {
+        if (!entry.account) return;
+        const { account_id, account_type, account_name, balance_nature } = entry.account;
+        if (!['ASSET', 'LIABILITY'].includes(account_type)) return;
+
+        if (!ledgerMap[account_id]) {
+          ledgerMap[account_id] = { account_id, account_name, account_type, balance_nature, totalDebit: 0, totalCredit: 0 };
+        }
+        ledgerMap[account_id].totalDebit  += entry.debit_amount  || 0;
+        ledgerMap[account_id].totalCredit += entry.credit_amount || 0;
+      });
+
+      // Catch-all / grouping account names to skip (matches Overview's existing filter)
+      const isCatchAll = (name) => {
+        const n = name.toLowerCase().trim();
+        return (
+          n.includes('uncategor') || n.includes('unclassif') || n.includes('suspense') ||
+          n.includes('opening bal') || n === 'assets' || n === 'liabilities' ||
+          n === 'current assets' || n === 'fixed assets' || n === 'non-current assets' ||
+          n === 'current liabilities' || n === 'long-term liabilities' ||
+          n === 'non-current liabilities' || n === 'other' || n === 'others' ||
+          n === 'miscellaneous' || n === 'misc' || n === 'general' || n === 'undefined' || n === 'unknown'
+        );
+      };
+
+      // Compute net balance per account using balance_nature
+      let totalAssetsVal = 0;
+      let totalLiabilitiesVal = 0;
+      const assetsBreakdownMap = {};
+      const liabilitiesBreakdownMap = {};
+
+      Object.values(ledgerMap).forEach(acc => {
+        // For Assets/Liabilities to be 'Correct', we must include all accounts,
+        // even generic ones, otherwise the total isn't a true representation of the cash/debt state.
+
+        // balance_nature DEBIT means the account normally has a debit balance (asset)
+        const balance = acc.balance_nature === 'DEBIT'
+          ? acc.totalDebit - acc.totalCredit
+          : acc.totalCredit - acc.totalDebit;
+
+        if (acc.account_type === 'ASSET') {
+          totalAssetsVal += balance;
+          if (!assetsBreakdownMap[acc.account_name]) assetsBreakdownMap[acc.account_name] = 0;
+          assetsBreakdownMap[acc.account_name] += balance;
+        } else if (acc.account_type === 'LIABILITY') {
+          totalLiabilitiesVal += balance;
+          if (!liabilitiesBreakdownMap[acc.account_name]) liabilitiesBreakdownMap[acc.account_name] = 0;
+          liabilitiesBreakdownMap[acc.account_name] += balance;
+        }
+      });
+
+      setAssetsLedger({
+        total: totalAssetsVal,
+        breakdown: Object.entries(assetsBreakdownMap)
+          .map(([name, amount]) => ({ name, amount }))
+          .sort((a, b) => b.amount - a.amount)
+      });
+      setLiabilitiesLedger({
+        total: totalLiabilitiesVal,
+        breakdown: Object.entries(liabilitiesBreakdownMap)
+          .map(([name, amount]) => ({ name, amount }))
+          .sort((a, b) => b.amount - a.amount)
+      });
+
     } catch (err) {
       console.error('Error fetching overview data:', err);
     } finally {
@@ -81,7 +170,7 @@ const Overview = () => {
     }
   };
 
-  const { stats, topExpenses, incomeBreakdown, expenseBreakdown, recentTxns, chartData, insights, mappedExpenses, donutColors } = React.useMemo(() => {
+  const { stats, topExpenses, incomeBreakdown, expenseBreakdown, assetsBreakdown, liabilitiesBreakdown, recentTxns, chartData, insights, mappedExpenses, donutColors } = React.useMemo(() => {
     const txns = selectedAccountId === 'ALL' ? allTxns : allTxns.filter(t => String(t.account_id) === String(selectedAccountId));
 
     let totalIncome = 0;
@@ -89,6 +178,8 @@ const Overview = () => {
     const expenseMap = {};
     const incomeMap = {};
     const monthlyData = {};
+    // Track only categorised transactions for the Recent Transactions table
+    const categorisedTxns = [];
 
     txns.forEach(txn => {
       const credit = parseFloat(txn.credit) || 0;
@@ -113,10 +204,9 @@ const Overview = () => {
       }
 
       if (!monthlyData[timeKey]) {
+        // Start at 0 — only categorised P&L amounts will be added below
         monthlyData[timeKey] = { income: 0, expense: 0, label: timeKey, _d: sortTime };
       }
-      monthlyData[timeKey].income += credit;
-      monthlyData[timeKey].expense += debit;
 
       let category = 'Uncategorized';
       let offsetAccountType = null;
@@ -134,53 +224,75 @@ const Overview = () => {
       }
 
       // Skip contra transactions (internal bank-to-bank transfers)
-      if (isContra) {
-        monthlyData[timeKey].income -= credit;
-        monthlyData[timeKey].expense -= debit;
-        return;
-      }
+      if (isContra) return;
 
       // Skip uncategorised transactions:
       // 1. the database explicitly marked it as uncategorised (is_uncategorised === true)
       // 2. no linked account at all (offsetAccountType is null)
-      // 3. name fallback safety net
-      const isUncategorised = isUncatDB || offsetAccountType === null || category.toLowerCase().includes('uncategor');
-      if (isUncategorised) {
-        monthlyData[timeKey].income -= credit;
-        monthlyData[timeKey].expense -= debit;
-        return;
-      }
+      // 3. name fallback safety net — catches generic/catch-all account names
+      const catLower = category.toLowerCase().trim();
+      const isUncategorised =
+        isUncatDB ||
+        offsetAccountType === null ||
+        catLower.includes('uncategor') ||    // "Uncategorized", "Uncategorised"
+        catLower.includes('unclassif') ||    // "Unclassified Expenses/Assets"
+        catLower.includes('suspense') ||     // "Suspense Account"
+        catLower.includes('opening bal') ||  // "Opening Balance"
+        catLower.includes('temp') ||         // "Temporary", "Temp Account"
+        catLower === 'other' ||
+        catLower === 'others' ||
+        catLower === 'miscellaneous' ||
+        catLower === 'misc' ||
+        catLower === 'undefined' ||
+        catLower === 'unknown' ||
+        catLower === 'general' ||
+        // Generic top-level COA grouping nodes — not real offset accounts
+        catLower === 'assets' ||
+        catLower === 'liabilities' ||
+        catLower === 'income' ||
+        catLower === 'expenses' ||
+        catLower === 'equity' ||
+        catLower === 'current assets' ||
+        catLower === 'fixed assets' ||
+        catLower === 'non-current assets' ||
+        catLower === 'current liabilities' ||
+        catLower === 'long-term liabilities' ||
+        catLower === 'non-current liabilities';
+      if (isUncategorised) return;
 
       // Strict COA-based classification — use account_type exactly as defined in Chart of Accounts:
-      //   EXPENSE  → counts as an expense (Rent, Food, Travel, etc.)
-      //   INCOME   → counts as income (Salary received, Revenue, etc.)
-      //   ASSET / LIABILITY / EQUITY / anything else → skip from P&L (balance sheet movements)
+      //   EXPENSE     → counts as an expense (Rent, Food, Travel, etc.)
+      //   INCOME      → counts as income (Salary received, Revenue, etc.)
+      //   ASSET       → asset increase = debit on asset account
+      //   LIABILITY   → liability increase = credit on liability account
+      //   EQUITY / anything else → skip entirely
 
       if (offsetAccountType === 'EXPENSE') {
         if (debit > 0) {
           totalExpense += debit;
+          monthlyData[timeKey].expense += debit;
           if (!expenseMap[category]) expenseMap[category] = { amount: 0, txns: [] };
           expenseMap[category].amount += debit;
           expenseMap[category].txns.push(txn);
-        } else {
-          // Credit on an EXPENSE account = expense reversal — subtract from chart too
-          monthlyData[timeKey].expense -= credit;
+          categorisedTxns.push(txn);
+        } else if (credit > 0) {
+          // Credit on an EXPENSE account = expense reversal
+          monthlyData[timeKey].expense = Math.max(0, monthlyData[timeKey].expense - credit);
         }
       } else if (offsetAccountType === 'INCOME') {
         if (credit > 0) {
           totalIncome += credit;
+          monthlyData[timeKey].income += credit;
           if (!incomeMap[category]) incomeMap[category] = { amount: 0, txns: [] };
           incomeMap[category].amount += credit;
           incomeMap[category].txns.push(txn);
-        } else {
-          // Debit on an INCOME account = income reversal — subtract from chart too
-          monthlyData[timeKey].income -= debit;
+          categorisedTxns.push(txn);
+        } else if (debit > 0) {
+          // Debit on an INCOME account = income reversal
+          monthlyData[timeKey].income = Math.max(0, monthlyData[timeKey].income - debit);
         }
-      } else {
-        // ASSET, LIABILITY, EQUITY — balance sheet movement, exclude from P&L chart
-        monthlyData[timeKey].income -= credit;
-        monthlyData[timeKey].expense -= debit;
       }
+      // EQUITY, ASSETS, LIABILITIES — skip from P&L widgets
     });
 
     const balance = totalIncome - totalExpense;
@@ -231,7 +343,8 @@ const Overview = () => {
       expenseBreakdown: Object.entries(expenseMap)
         .map(([name, data]) => ({ name, amount: data.amount, txns: data.txns }))
         .sort((a, b) => b.amount - a.amount),
-      recentTxns: txns.slice(0, 5),
+      // Only show properly categorised transactions in the recent list
+      recentTxns: categorisedTxns.slice(0, 5),
       chartData: sortedMonths
     };
   }, [allTxns, selectedAccountId, timeframe]);
@@ -320,6 +433,26 @@ const Overview = () => {
           <div className="stat-info">
             <span className="stat-label">Balance</span>
             <span className="stat-value">{formatCurrency(stats.balance)}</span>
+          </div>
+        </div>
+
+        <div className="stat-card" onClick={() => handleStatClick('ASSETS')} style={{ cursor: 'pointer' }}>
+          <div className="stat-icon assets">
+            <svg width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"></rect><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"></path><line x1="12" y1="12" x2="12" y2="16"></line><line x1="10" y1="14" x2="14" y2="14"></line></svg>
+          </div>
+          <div className="stat-info">
+            <span className="stat-label">Total Assets</span>
+            <span className="stat-value">{formatCurrency(Math.abs(assetsLedger.total))}</span>
+          </div>
+        </div>
+
+        <div className="stat-card" onClick={() => handleStatClick('LIABILITIES')} style={{ cursor: 'pointer' }}>
+          <div className="stat-icon liabilities">
+            <svg width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"></path><path d="M2 17l10 5 10-5"></path><path d="M2 12l10 5 10-5"></path></svg>
+          </div>
+          <div className="stat-info">
+            <span className="stat-label">Total Liabilities</span>
+            <span className="stat-value">{formatCurrency(Math.abs(liabilitiesLedger.total))}</span>
           </div>
         </div>
       </div>
@@ -578,7 +711,7 @@ const Overview = () => {
               {breakdownModal.data.map((item, i) => (
                 <div key={i} className="breakdown-item">
                   <span className="breakdown-name">{item.name}</span>
-                  <span className="breakdown-amount">{formatCurrency(item.amount)}</span>
+                  <span className="breakdown-amount">{formatCurrency(Math.abs(item.amount))}</span>
                 </div>
               ))}
               {breakdownModal.data.length === 0 && <div className="empty-state">No data available.</div>}

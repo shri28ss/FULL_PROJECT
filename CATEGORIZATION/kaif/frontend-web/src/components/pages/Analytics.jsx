@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../../shared/supabase';
+import { jsPDF } from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import '../../styles/Analytics.css';
 
 /**
@@ -83,6 +85,9 @@ const Analytics = () => {
   const [selectedAccountId, setSelectedAccountId] = useState('ALL');
   const [bankAccounts, setBankAccounts] = useState([]);
   const [includePending, setIncludePending] = useState(false);
+  const [showPLDownload, setShowPLDownload] = useState(false);
+  const [showBSDownload, setShowBSDownload] = useState(false);
+  const [showLedgerDownload, setShowLedgerDownload] = useState(false);
 
   // Custom date range state
   const getDefaultDates = () => {
@@ -347,7 +352,6 @@ const Analytics = () => {
             )
           `)
           .eq('user_id', user.id)
-          .gte('entry_date', range.from)
           .lte('entry_date', range.to);
 
         if (selectedAccountId !== 'ALL') {
@@ -585,6 +589,70 @@ const Analytics = () => {
       document.body.removeChild(link);
     };
 
+    const exportPLToPDF = () => {
+      const doc = new jsPDF();
+      const title = "Profit and Loss";
+      const meta = `From ${dateRange ? fmtDate(dateRange.from) : ''} To ${dateRange ? fmtDate(dateRange.to) : ''}`;
+      
+      doc.setFontSize(20);
+      doc.text(title, 14, 22);
+      doc.setFontSize(10);
+      doc.setTextColor(100);
+      doc.text(meta, 14, 30);
+      doc.text("Basis: Accrual", 14, 35);
+
+      const tableRows = [];
+      
+      // Income
+      incomeGroups.forEach(group => {
+        tableRows.push([{ content: group.groupName, styles: { fontStyle: 'bold', fillColor: [240, 240, 240] } }, '']);
+        group.items.forEach(item => {
+          tableRows.push([`    ${item.name}`, formatPLAmount(item.amount)]);
+        });
+        tableRows.push([{ content: `Total for ${group.groupName}`, styles: { fontStyle: 'bold' } }, { content: formatPLAmount(group.total), styles: { fontStyle: 'bold' } }]);
+      });
+      
+      tableRows.push([{ content: 'Total Income', styles: { fontStyle: 'bold', fillColor: [230, 230, 230] } }, { content: formatPLAmount(totalIncome), styles: { fontStyle: 'bold', fillColor: [230, 230, 230] } }]);
+      tableRows.push(['', '']);
+
+      // COGS
+      if (hasCogs) {
+        tableRows.push([{ content: 'Cost of Goods Sold', styles: { fontStyle: 'bold', fillColor: [240, 240, 240] } }, '']);
+        cogsItems.forEach(item => {
+          tableRows.push([`    ${item.name}`, formatPLAmount(item.amount)]);
+        });
+        tableRows.push([{ content: 'Total Cost of Goods Sold', styles: { fontStyle: 'bold' } }, { content: formatPLAmount(totalCogs), styles: { fontStyle: 'bold' } }]);
+        tableRows.push([{ content: 'Gross Profit', styles: { fontStyle: 'bold', fillColor: [230, 230, 230] } }, { content: formatPLAmount(grossProfit), styles: { fontStyle: 'bold', fillColor: [230, 230, 230] } }]);
+        tableRows.push(['', '']);
+      }
+
+      // Expenses
+      expenseGroups.forEach(group => {
+        tableRows.push([{ content: group.groupName, styles: { fontStyle: 'bold', fillColor: [240, 240, 240] } }, '']);
+        group.items.forEach(item => {
+          tableRows.push([`    ${item.name}`, formatPLAmount(item.amount)]);
+        });
+        tableRows.push([{ content: `Total for ${group.groupName}`, styles: { fontStyle: 'bold' } }, { content: formatPLAmount(group.total), styles: { fontStyle: 'bold' } }]);
+      });
+
+      tableRows.push([{ content: 'Total Expenses', styles: { fontStyle: 'bold', fillColor: [230, 230, 230] } }, { content: formatPLAmount(totalExpense), styles: { fontStyle: 'bold', fillColor: [230, 230, 230] } }]);
+      tableRows.push(['', '']);
+      
+      // Net Profit
+      tableRows.push([{ content: 'Net Profit/Loss', styles: { fontStyle: 'bold', fillColor: [200, 200, 200], fontSize: 12 } }, { content: formatPLAmount(netPL), styles: { fontStyle: 'bold', fillColor: [200, 200, 200], fontSize: 12 } }]);
+
+      autoTable(doc, {
+        startY: 45,
+        head: [['ACCOUNT', 'TOTAL']],
+        body: tableRows,
+        theme: 'plain',
+        headStyles: { fillColor: [59, 130, 246], textColor: [255, 255, 255] },
+        styles: { fontSize: 9, cellPadding: 3 },
+      });
+
+      doc.save(`Profit_and_Loss_${new Date().toISOString().split('T')[0]}.pdf`);
+    };
+
     return (
       <div className="pl-report-container">
         {isPending && (
@@ -603,14 +671,30 @@ const Analytics = () => {
               <span>From {dateRange ? fmtDate(dateRange.from) : ''} To {dateRange ? fmtDate(dateRange.to) : ''}</span>
             </div>
           </div>
-          <button 
-            className="action-btn outline-btn" 
-            onClick={exportPLToCSV}
-            style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 16px', fontSize: '0.9rem' }}
-          >
-            <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
-            Export CSV
-          </button>
+          <div className="export-dropdown">
+            <button 
+              className="action-btn outline-btn" 
+              onClick={() => setShowPLDownload(!showPLDownload)}
+              style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 16px', fontSize: '0.85rem' }}
+            >
+              <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a2 2 0 002 2h12a2 2 0 002-2v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+              Download
+              <svg width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" style={{ transform: showPLDownload ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}><path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7"></path></svg>
+            </button>
+            
+            {showPLDownload && (
+              <div className="export-menu">
+                <button className="export-menu-item" onClick={() => { exportPLToPDF(); setShowPLDownload(false); }}>
+                  <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"></path></svg>
+                  PDF Report
+                </button>
+                <button className="export-menu-item" onClick={() => { exportPLToCSV(); setShowPLDownload(false); }}>
+                  <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                  CSV Data
+                </button>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* P&L Table */}
@@ -807,6 +891,55 @@ const Analytics = () => {
       document.body.removeChild(link);
     };
 
+    const exportBalanceToPDF = () => {
+      const doc = new jsPDF();
+      const title = "Balance Sheet";
+      const meta = `As of ${dateRange ? fmtDate(dateRange.to) : ''}`;
+      
+      doc.setFontSize(20);
+      doc.text(title, 14, 22);
+      doc.setFontSize(10);
+      doc.setTextColor(100);
+      doc.text(meta, 14, 30);
+      doc.text("Basis: Accrual", 14, 35);
+
+      const tableRows = [];
+      
+      // Assets
+      tableRows.push([{ content: 'Assets', styles: { fontStyle: 'bold', fillColor: [59, 130, 246], textColor: [255, 255, 255] } }, '']);
+      assetsGroups.forEach(group => {
+        tableRows.push([{ content: group.groupName, styles: { fontStyle: 'bold', fillColor: [240, 240, 240] } }, '']);
+        group.items.forEach(item => {
+          tableRows.push([`    ${item.name}`, formatPLAmount(item.amount)]);
+        });
+        tableRows.push([{ content: `Total for ${group.groupName}`, styles: { fontStyle: 'bold' } }, { content: formatPLAmount(group.total), styles: { fontStyle: 'bold' } }]);
+      });
+      tableRows.push([{ content: 'Total Assets', styles: { fontStyle: 'bold', fillColor: [230, 230, 230] } }, { content: formatPLAmount(totalAssets), styles: { fontStyle: 'bold', fillColor: [230, 230, 230] } }]);
+      tableRows.push(['', '']);
+
+      // Liabilities
+      tableRows.push([{ content: 'Liabilities & Equities', styles: { fontStyle: 'bold', fillColor: [59, 130, 246], textColor: [255, 255, 255] } }, '']);
+      liabilitiesEquitiesGroups.forEach(group => {
+        tableRows.push([{ content: group.groupName, styles: { fontStyle: 'bold', fillColor: [240, 240, 240] } }, '']);
+        group.items.forEach(item => {
+          tableRows.push([`    ${item.name}`, formatPLAmount(item.amount)]);
+        });
+        tableRows.push([{ content: `Total for ${group.groupName}`, styles: { fontStyle: 'bold' } }, { content: formatPLAmount(group.total), styles: { fontStyle: 'bold' } }]);
+      });
+      tableRows.push([{ content: 'Total Liabilities & Equities', styles: { fontStyle: 'bold', fillColor: [230, 230, 230] } }, { content: formatPLAmount(totalLiabilitiesEquities), styles: { fontStyle: 'bold', fillColor: [230, 230, 230] } }]);
+
+      autoTable(doc, {
+        startY: 45,
+        head: [['ACCOUNT', 'TOTAL']],
+        body: tableRows,
+        theme: 'plain',
+        headStyles: { fillColor: [59, 130, 246], textColor: [255, 255, 255] },
+        styles: { fontSize: 9, cellPadding: 3 },
+      });
+
+      doc.save(`Balance_Sheet_${new Date().toISOString().split('T')[0]}.pdf`);
+    };
+
     return (
       <div className="pl-report-container">
         {/* Report Header */}
@@ -818,14 +951,30 @@ const Analytics = () => {
               <span>As of {dateRange ? fmtDate(dateRange.to) : ''}</span>
             </div>
           </div>
-          <button 
-            className="action-btn outline-btn" 
-            onClick={exportBalanceToCSV}
-            style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 16px', fontSize: '0.9rem' }}
-          >
-            <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
-            Export CSV
-          </button>
+          <div className="export-dropdown">
+            <button 
+              className="action-btn outline-btn" 
+              onClick={() => setShowBSDownload(!showBSDownload)}
+              style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 16px', fontSize: '0.85rem' }}
+            >
+              <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a2 2 0 002 2h12a2 2 0 002-2v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+              Download
+              <svg width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" style={{ transform: showBSDownload ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}><path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7"></path></svg>
+            </button>
+            
+            {showBSDownload && (
+              <div className="export-menu">
+                <button className="export-menu-item" onClick={() => { exportBalanceToPDF(); setShowBSDownload(false); }}>
+                  <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"></path></svg>
+                  PDF Report
+                </button>
+                <button className="export-menu-item" onClick={() => { exportBalanceToCSV(); setShowBSDownload(false); }}>
+                  <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                  CSV Data
+                </button>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Balance Sheet Table */}
@@ -942,8 +1091,85 @@ const Analytics = () => {
       return { bg: 'rgba(156,163,175,0.12)', color: '#6b7280' };
     };
 
+    const exportLedgerToCSV = () => {
+      const rows = [['DATE', 'DESCRIPTION', 'ACCOUNT', 'TYPE', 'DEBIT', 'CREDIT']];
+      ledgerData.forEach(entry => {
+        rows.push([
+          entry.entry_date,
+          entry.transaction?.details || '',
+          entry.account?.account_name || '',
+          entry.account?.account_type || '',
+          entry.debit_amount || 0,
+          entry.credit_amount || 0
+        ]);
+      });
+      const csvContent = "data:text/csv;charset=utf-8," + rows.map(r => r.join(',')).join('\n');
+      const encodedUri = encodeURI(csvContent);
+      const link = document.createElement("a");
+      link.setAttribute("href", encodedUri);
+      link.setAttribute("download", `General_Ledger_${new Date().toISOString().split('T')[0]}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    };
+
+    const exportLedgerToPDF = () => {
+      const doc = new jsPDF();
+      doc.setFontSize(20);
+      doc.text("General Ledger", 14, 22);
+      
+      const tableRows = [];
+      ledgerData.forEach(entry => {
+        tableRows.push([
+          formatDate(entry.entry_date),
+          entry.transaction?.details || '',
+          entry.account?.account_name || '',
+          entry.debit_amount > 0 ? formatCurrency(entry.debit_amount) : '',
+          entry.credit_amount > 0 ? formatCurrency(entry.credit_amount) : ''
+        ]);
+      });
+
+      autoTable(doc, {
+        startY: 30,
+        head: [['DATE', 'DESCRIPTION', 'ACCOUNT', 'DEBIT', 'CREDIT']],
+        body: tableRows,
+        theme: 'striped',
+        headStyles: { fillColor: [59, 130, 246] },
+        styles: { fontSize: 8 },
+      });
+
+      doc.save(`General_Ledger_${new Date().toISOString().split('T')[0]}.pdf`);
+    };
+
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+        {/* Ledger Header with Export Dropdown */}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginBottom: '8px' }}>
+          <div className="export-dropdown">
+            <button 
+              className="action-btn outline-btn" 
+              onClick={() => setShowLedgerDownload(!showLedgerDownload)}
+              style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 12px', fontSize: '0.8rem' }}
+            >
+              <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a2 2 0 002 2h12a2 2 0 002-2v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+              Download
+              <svg width="10" height="10" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" style={{ transform: showLedgerDownload ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}><path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7"></path></svg>
+            </button>
+            
+            {showLedgerDownload && (
+              <div className="export-menu">
+                <button className="export-menu-item" onClick={() => { exportLedgerToPDF(); setShowLedgerDownload(false); }}>
+                  <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"></path></svg>
+                  PDF Ledger
+                </button>
+                <button className="export-menu-item" onClick={() => { exportLedgerToCSV(); setShowLedgerDownload(false); }}>
+                  <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                  CSV Data
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
         {/* Header */}
         <div style={{
           display: 'grid', gridTemplateColumns: '110px 1fr 160px 120px 120px',
