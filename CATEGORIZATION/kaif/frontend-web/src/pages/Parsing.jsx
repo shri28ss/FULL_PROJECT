@@ -296,6 +296,7 @@ export default function ParsingPage() {
                 {!isExtracting && (!activeDoc || activeDoc.status !== "DONE") && (
                     <>
                         <div className="dropzone" 
+                            onClick={() => fileInputRef.current.click()}
                             style={{ 
                                 minHeight: '180px', 
                                 border: '2px dashed var(--border-color)', 
@@ -307,13 +308,13 @@ export default function ParsingPage() {
                                 padding: '1.5rem', 
                                 transition: 'all 0.2s ease',
                                 background: file ? 'rgba(99, 102, 241, 0.03)' : 'transparent',
-                                cursor: 'default'
+                                cursor: 'pointer'
                             }}
                         >
                             <input type="file" hidden ref={fileInputRef} onChange={onFileChange} accept=".pdf" />
                             
                             {!file ? (
-                                <div onClick={() => fileInputRef.current.click()} style={{ textAlign: 'center', cursor: 'pointer' }}>
+                                <div style={{ textAlign: 'center' }}>
                                     <FileUp size={40} style={{ color: 'var(--primary-action)', marginBottom: '0.75rem' }} />
                                     <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>Choose PDF Statement</div>
                                     <div style={{ fontSize: '0.86rem', color: 'var(--text-secondary)' }}>Maximum 50MB per file</div>
@@ -323,7 +324,7 @@ export default function ParsingPage() {
                                     <FileText size={24} style={{ color: 'var(--primary-action)' }} />
                                     <div style={{ maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '0.9rem', fontWeight: 700 }}>{file.name}</div>
                                     <button 
-                                        onClick={() => { setFile(null); setPassword(""); setStatus("IDLE"); setError(""); }}
+                                        onClick={(e) => { e.stopPropagation(); setFile(null); setPassword(""); setStatus("IDLE"); setError(""); }}
                                         style={{ background: 'rgba(231, 76, 60, 0.1)', color: '#e74c3c', border: 'none', width: '24px', height: '24px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', transition: 'all 0.2s' }}
                                         title="Remove file"
                                     >

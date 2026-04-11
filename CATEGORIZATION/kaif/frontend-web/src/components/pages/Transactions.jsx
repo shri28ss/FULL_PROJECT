@@ -361,6 +361,9 @@ const Transactions = () => {
               setCategoriseStatus(payload.message);
               localStorage.setItem('categoriseStatus', payload.message);
             }
+            if (payload.flush) {
+              fetchTransactions(activeFilter, true);
+            }
             if (payload.done) {
               showToast('✅ Bulk categorise success!', 'success');
               fetchTransactions(activeFilter, true);

@@ -127,7 +127,7 @@ async function recategorizeTransaction(req, res) {
     // Fetch the just-updated transaction to get match fields (include details for rules engine fallback)
     const { data: updatedTxn } = await supabase
       .from('transactions')
-      .select('extracted_id, transaction_type, offset_account_id, details')
+      .select('extracted_id, transaction_type, offset_account_id, details, uncategorized_transaction_id')
       .eq('transaction_id', transactionId)
       .eq('user_id', userId)
       .single();
@@ -157,43 +157,109 @@ async function recategorizeTransaction(req, res) {
 
       suggestedAccount = suggestedAccountData || null;
 
-      // Build match condition
-      let similarQuery = supabase
-        .from('transactions')
-        .select(`
-          transaction_id,
-          amount,
-          transaction_type,
-          transaction_date,
-          details,
-          extracted_id,
-          offset_account_id,
-          attention_level,
-          current_account:offset_account_id (
-            account_id,
-            account_name
-          )
-        `)
-        .eq('user_id', userId)
-        .eq('review_status', 'PENDING')
-        .eq('transaction_type', transaction_type)
-        .neq('transaction_id', transactionId);
+      // ── Priority 0: merchant_group_id matching ──────────────────────────────
+      // Surface pre-pipeline (uncategorised) group members before falling back
+      // to the existing extracted_id and offset_account_id logic.
+      // Only runs when the transaction has a linked uncategorized_transaction_id.
+      if (updatedTxn.uncategorized_transaction_id) {
+        const { data: uncatSource } = await supabase
+          .from('uncategorized_transactions')
+          .select('merchant_group_id')
+          .eq('uncategorized_transaction_id', updatedTxn.uncategorized_transaction_id)
+          .eq('user_id', userId)
+          .maybeSingle();
 
-      // Priority 1: match on extracted_id (from DB or recovered via rules engine) — covers all
-      //             pending txns with the same merchant key regardless of categorisation state.
-      // Priority 2: fallback to same offset_account_id, HIGH/MEDIUM attention only,
-      //             and already-categorised rows (more conservative since less precise).
-      if (extracted_id) {
-        similarQuery = similarQuery.eq('extracted_id', extracted_id);
-      } else {
-        similarQuery = similarQuery
-          .eq('offset_account_id', offset_account_id)
-          .eq('is_uncategorised', false)
-          .in('attention_level', ['HIGH', 'MEDIUM']);
+        const groupId = uncatSource?.merchant_group_id;
+
+        if (groupId) {
+          // Fetch all group members still in uncategorized_transactions (not yet pipeline-processed)
+          const { data: groupMembers } = await supabase
+            .from('uncategorized_transactions')
+            .select('uncategorized_transaction_id, details, txn_date, debit, credit, account_id, merchant_group_id')
+            .eq('merchant_group_id', groupId)
+            .eq('user_id', userId)
+            .neq('uncategorized_transaction_id', updatedTxn.uncategorized_transaction_id)
+            .neq('grouping_status', 'skipped')
+            .limit(20);
+
+          if (groupMembers && groupMembers.length > 0) {
+            const memberIds = groupMembers.map(m => m.uncategorized_transaction_id);
+
+            // Determine which group members are already in the transactions table
+            const { data: alreadyCategorised } = await supabase
+              .from('transactions')
+              .select('uncategorized_transaction_id')
+              .in('uncategorized_transaction_id', memberIds)
+              .eq('user_id', userId);
+
+            const alreadyCategorisedIds = new Set(
+              (alreadyCategorised || []).map(r => r.uncategorized_transaction_id)
+            );
+
+            // Only surface rows that are purely pre-pipeline (not yet in transactions table)
+            const prePipelineMembers = groupMembers.filter(
+              m => !alreadyCategorisedIds.has(m.uncategorized_transaction_id)
+            );
+
+            if (prePipelineMembers.length > 0) {
+              similarTransactions = prePipelineMembers.map(m => ({
+                transaction_id: null,
+                amount: m.debit || m.credit,
+                transaction_type: m.debit ? 'DEBIT' : 'CREDIT',
+                transaction_date: m.txn_date,
+                details: m.details,
+                offset_account_id: null,
+                attention_level: 'HIGH',
+                current_account: null,
+                uncategorized_transaction_id: m.uncategorized_transaction_id,
+                is_pre_pipeline: true
+              }));
+            }
+          }
+        }
       }
 
-      const { data: similar } = await similarQuery.limit(20);
-      similarTransactions = similar || [];
+      // If Priority 0 found results, skip Priority 1 and Priority 2
+      if (similarTransactions.length === 0) {
+        // Build match condition
+        let similarQuery = supabase
+          .from('transactions')
+          .select(`
+            transaction_id,
+            amount,
+            transaction_type,
+            transaction_date,
+            details,
+            extracted_id,
+            offset_account_id,
+            attention_level,
+            current_account:offset_account_id (
+              account_id,
+              account_name
+            )
+          `)
+          .eq('user_id', userId)
+          .eq('review_status', 'PENDING')
+          .eq('transaction_type', transaction_type)
+          .neq('transaction_id', transactionId);
+
+        // Priority 1: match on extracted_id (from DB or recovered via rules engine) — covers all
+        //             pending txns with the same merchant key regardless of categorisation state.
+        // Priority 2: fallback to same offset_account_id, HIGH/MEDIUM attention only,
+        //             and already-categorised rows (more conservative since less precise).
+        if (extracted_id) {
+          similarQuery = similarQuery.eq('extracted_id', extracted_id);
+        } else {
+          similarQuery = similarQuery
+            .eq('offset_account_id', offset_account_id)
+            .eq('is_uncategorised', false)
+            .in('attention_level', ['HIGH', 'MEDIUM']);
+        }
+
+        const { data: similar } = await similarQuery.limit(20);
+        similarTransactions = similar || [];
+      }
+      // ── End similar transaction logic ─────────────────────────────────────
     }
 
     return res.status(200).json({
@@ -453,10 +519,10 @@ async function manualCategorizeTransaction(req, res) {
       return res.status(400).json({ error: 'Missing uncategorized_transaction_id or offset_account_id.' });
     }
 
-    // Fetch the uncategorized transaction row
+    // Fetch the uncategorized transaction row (include merchant_group_id for Priority 0 similar-txn matching)
     const { data: uncatData, error: uncatError } = await supabase
       .from('uncategorized_transactions')
-      .select('account_id, document_id, txn_date, details, debit, credit')
+      .select('account_id, document_id, txn_date, details, debit, credit, merchant_group_id')
       .eq('uncategorized_transaction_id', uncategorized_transaction_id)
       .eq('user_id', userId)
       .single();
@@ -540,43 +606,98 @@ async function manualCategorizeTransaction(req, res) {
         effectiveExtractedId = rulesResult.extractedId;
       }
 
-      // Build match condition for similar transactions
-      let similarQuery = supabase
-        .from('transactions')
-        .select(`
-          transaction_id,
-          amount,
-          transaction_type,
-          transaction_date,
-          details,
-          extracted_id,
-          offset_account_id,
-          attention_level,
-          current_account:offset_account_id (
-            account_id,
-            account_name
-          )
-        `)
-        .eq('user_id', userId)
-        .eq('review_status', 'PENDING')
-        .eq('transaction_type', newTxn.transaction_type)
-        .neq('transaction_id', newTxn.transaction_id);
+      // ── Priority 0: merchant_group_id matching ──────────────────────────────
+      // Surface pre-pipeline (uncategorised) group members before falling back
+      // to the existing extracted_id and offset_account_id logic.
+      const groupId = uncatData.merchant_group_id;
 
-      // Priority 1: match on extracted_id (from DB or recovered via rules engine) — covers all
-      //             pending txns with the same merchant key regardless of categorisation state.
-      // Priority 2: fallback to same offset_account_id, HIGH/MEDIUM attention only,
-      //             and already-categorised rows (more conservative since less precise).
-      if (effectiveExtractedId) {
-        similarQuery = similarQuery.eq('extracted_id', effectiveExtractedId);
-      } else {
-        similarQuery = similarQuery
-          .eq('offset_account_id', newTxn.offset_account_id)
-          .eq('is_uncategorised', false)
-          .in('attention_level', ['HIGH', 'MEDIUM']);
+      if (groupId) {
+        const { data: groupMembers } = await supabase
+          .from('uncategorized_transactions')
+          .select('uncategorized_transaction_id, details, txn_date, debit, credit, account_id, merchant_group_id')
+          .eq('merchant_group_id', groupId)
+          .eq('user_id', userId)
+          .neq('uncategorized_transaction_id', uncategorized_transaction_id)
+          .neq('grouping_status', 'skipped')
+          .limit(20);
+
+        if (groupMembers && groupMembers.length > 0) {
+          const memberIds = groupMembers.map(m => m.uncategorized_transaction_id);
+
+          // Determine which group members are already in the transactions table
+          const { data: alreadyCategorised } = await supabase
+            .from('transactions')
+            .select('uncategorized_transaction_id')
+            .in('uncategorized_transaction_id', memberIds)
+            .eq('user_id', userId);
+
+          const alreadyCategorisedIds = new Set(
+            (alreadyCategorised || []).map(r => r.uncategorized_transaction_id)
+          );
+
+          // Only surface rows that are purely pre-pipeline (not yet in transactions table)
+          const prePipelineMembers = groupMembers.filter(
+            m => !alreadyCategorisedIds.has(m.uncategorized_transaction_id)
+          );
+
+          if (prePipelineMembers.length > 0) {
+            similarTransactions = prePipelineMembers.map(m => ({
+              transaction_id: null,
+              amount: m.debit || m.credit,
+              transaction_type: m.debit ? 'DEBIT' : 'CREDIT',
+              transaction_date: m.txn_date,
+              details: m.details,
+              offset_account_id: null,
+              attention_level: 'HIGH',
+              current_account: null,
+              uncategorized_transaction_id: m.uncategorized_transaction_id,
+              is_pre_pipeline: true
+            }));
+          }
+        }
       }
 
-      const { data: similar } = await similarQuery.limit(20);
-      similarTransactions = similar || [];
+      // If Priority 0 found results, skip Priority 1 and Priority 2
+      if (similarTransactions.length === 0) {
+        // Build match condition for similar transactions
+        let similarQuery = supabase
+          .from('transactions')
+          .select(`
+            transaction_id,
+            amount,
+            transaction_type,
+            transaction_date,
+            details,
+            extracted_id,
+            offset_account_id,
+            attention_level,
+            current_account:offset_account_id (
+              account_id,
+              account_name
+            )
+          `)
+          .eq('user_id', userId)
+          .eq('review_status', 'PENDING')
+          .eq('transaction_type', newTxn.transaction_type)
+          .neq('transaction_id', newTxn.transaction_id);
+
+        // Priority 1: match on extracted_id (from DB or recovered via rules engine) — covers all
+        //             pending txns with the same merchant key regardless of categorisation state.
+        // Priority 2: fallback to same offset_account_id, HIGH/MEDIUM attention only,
+        //             and already-categorised rows (more conservative since less precise).
+        if (effectiveExtractedId) {
+          similarQuery = similarQuery.eq('extracted_id', effectiveExtractedId);
+        } else {
+          similarQuery = similarQuery
+            .eq('offset_account_id', newTxn.offset_account_id)
+            .eq('is_uncategorised', false)
+            .in('attention_level', ['HIGH', 'MEDIUM']);
+        }
+
+        const { data: similar } = await similarQuery.limit(20);
+        similarTransactions = similar || [];
+      }
+      // ── End similar transaction logic ─────────────────────────────────────
 
       // Seed personal cache — rulesResult already computed above
       // Cover both EXACT_THEN_DUMP (paytmqr, bharatpe etc.) and VECTOR_SEARCH rules

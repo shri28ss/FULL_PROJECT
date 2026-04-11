@@ -1,4 +1,4 @@
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, status, Depends
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, status, Depends, BackgroundTasks
 from pydantic import BaseModel
 from fastapi.responses import JSONResponse
 import os
@@ -551,8 +551,9 @@ async def retry_extraction(
 
 @router.post("/{document_id}/approve")
 async def approve_document(
-    document_id: int, 
-    body: Optional[ApprovalRequest] = None, 
+    document_id: int,
+    background_tasks: BackgroundTasks,
+    body: Optional[ApprovalRequest] = None,
     user=Depends(get_current_user)
 ):
     user_id = user["user_id"]
@@ -665,7 +666,26 @@ async def approve_document(
     inserted = len(rows)
     logger.info("✅ Document %s approved — %d txns saved (parser=%s)",
                 document_id, inserted, parser_used)
-    
+
+    # ── Fire pre-pipeline background grouping job ────────────────────────────
+    # Uses BackgroundTasks so the HTTP response is returned immediately.
+    # The grouping job creates its own isolated Supabase client (make_client)
+    # to avoid sharing the request handler's connection pool.
+    def _run_grouping_task(doc_id: int, uid: str) -> None:
+        from db.connection import make_client, set_thread_client, clear_thread_client
+        from services.merchant_grouping import run_merchant_grouping
+        thread_sb = make_client()
+        set_thread_client(thread_sb)
+        try:
+            run_merchant_grouping(doc_id, uid)
+        except Exception as grp_err:
+            logger.error("[GROUPING] Failed for doc_id=%s: %s", doc_id, grp_err)
+        finally:
+            clear_thread_client()
+
+    background_tasks.add_task(_run_grouping_task, document_id, user_id)
+    logger.info("Grouping background task queued for document_id=%s", document_id)
+
     return {"message": "Document approved", "inserted": inserted}
 
 
