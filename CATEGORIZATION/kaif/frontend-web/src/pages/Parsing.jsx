@@ -2,7 +2,7 @@ import { useEffect, useState, useRef } from "react";
 import { motion } from "framer-motion";
 import {
     FileUp, CheckCircle, Loader2, AlertCircle, Search, Cpu, List, Lock,
-    FileText, Clock, ChevronDown, Table as TableIcon, Trash2, RotateCcw, Code
+    FileText, Clock, ChevronDown, Table as TableIcon, Trash2, RotateCcw, Code, Eye, EyeOff
 } from "lucide-react";
 import API from "../api/api";
 import { useNavigate } from "react-router-dom";
@@ -73,6 +73,7 @@ export default function ParsingPage() {
 
     const [file, setFile] = useState(null);
     const [password, setPassword] = useState("");
+    const [showPassword, setShowPassword] = useState(false);
     const [needsPassword, setNeedsPassword] = useState(false);
     const [pdfType, setPdfType] = useState(null);
     const [status, setStatus] = useState("IDLE");
@@ -197,6 +198,7 @@ export default function ParsingPage() {
         setError("");
         setPdfType(null);
         setNeedsPassword(false);
+        setShowPassword(false);
         setStatus("DETECTING");
 
         const formData = new FormData();
@@ -324,7 +326,7 @@ export default function ParsingPage() {
                                     <FileText size={24} style={{ color: 'var(--primary-action)' }} />
                                     <div style={{ maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '0.9rem', fontWeight: 700 }}>{file.name}</div>
                                     <button 
-                                        onClick={(e) => { e.stopPropagation(); setFile(null); setPassword(""); setStatus("IDLE"); setError(""); }}
+                                        onClick={(e) => { e.stopPropagation(); setFile(null); setPassword(""); setShowPassword(false); setStatus("IDLE"); setError(""); }}
                                         style={{ background: 'rgba(231, 76, 60, 0.1)', color: '#e74c3c', border: 'none', width: '24px', height: '24px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', transition: 'all 0.2s' }}
                                         title="Remove file"
                                     >
@@ -337,7 +339,26 @@ export default function ParsingPage() {
                         {needsPassword && (
                             <div style={{ marginTop: '1.5rem' }}>
                                 <label style={{ fontSize: '0.8rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}><Lock size={12} /> Password</label>
-                                <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} style={{ width: '100%', padding: '0.75rem', background: 'var(--input-bg)', border: '1px solid var(--border-color)', borderRadius: '8px', boxSizing: 'border-box' }} />
+                                <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                                    <input type={showPassword ? "text" : "password"} value={password} onChange={(e) => setPassword(e.target.value)} style={{ width: '100%', padding: '0.75rem', paddingRight: '40px', background: 'var(--input-bg)', border: '1px solid var(--border-color)', borderRadius: '8px', boxSizing: 'border-box' }} />
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowPassword(!showPassword)}
+                                        style={{
+                                            position: 'absolute',
+                                            right: '12px',
+                                            background: 'none',
+                                            border: 'none',
+                                            color: 'var(--text-secondary)',
+                                            cursor: 'pointer',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            padding: 0
+                                        }}
+                                    >
+                                        {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                                    </button>
+                                </div>
                             </div>
                         )}
 

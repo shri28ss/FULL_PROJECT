@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import AccountPickerModal from '../AccountPickerModal';
 import { Toast, useToast } from '../Toast';
 import { supabase } from '../../shared/supabase';
@@ -64,8 +64,129 @@ const AmountEditor = ({ txn, onSave, onCancel }) => {
   );
 };
 
+// Recursive tree view for choosing a destination (offset) account filter
+const OffsetAccountTree = ({ accounts, selectedIds, onToggle, searchQuery = '' }) => {
+  const [expandedIds, setExpandedIds] = useState(new Set());
+  const q = searchQuery.trim().toLowerCase();
+
+  const toggle = (id) => setExpandedIds(prev => {
+    const next = new Set(prev);
+    next.has(id) ? next.delete(id) : next.add(id);
+    return next;
+  });
+
+  // Build tree from flat list — roots are accounts with no parent in list
+  const accountMap = {};
+  accounts.forEach(a => { accountMap[a.account_id] = { ...a, children: [] }; });
+  const roots = [];
+  accounts.forEach(a => {
+    if (a.parent_account_id && accountMap[a.parent_account_id]) {
+      accountMap[a.parent_account_id].children.push(accountMap[a.account_id]);
+    } else {
+      roots.push(accountMap[a.account_id]);
+    }
+  });
+
+  // Auto-expand ancestors of any pre-selected account so the checkbox is visible
+  useEffect(() => {
+    if (accounts.length === 0 || selectedIds.size === 0) return;
+    const toExpand = new Set();
+    selectedIds.forEach(id => {
+      let current = accounts.find(a => a.account_id === id);
+      while (current?.parent_account_id) {
+        toExpand.add(current.parent_account_id);
+        current = accounts.find(a => a.account_id === current.parent_account_id);
+      }
+    });
+    if (toExpand.size > 0) {
+      setExpandedIds(prev => new Set([...prev, ...toExpand]));
+    }
+  }, [accounts, selectedIds]);
+
+  // Returns true if node or any descendant matches search
+  const nodeMatches = (node) => {
+    if (!q) return true;
+    if (node.account_name.toLowerCase().includes(q)) return true;
+    return (node.children || []).some(child => nodeMatches(child));
+  };
+
+  const renderNode = (node, depth = 0) => {
+    if (!nodeMatches(node)) return null;
+
+    const hasChildren = node.children && node.children.length > 0;
+    // Auto-expand when searching
+    const isExpanded = q ? true : expandedIds.has(node.account_id);
+    const isSelected = selectedIds.has(node.account_id);
+    const nameLC = node.account_name.toLowerCase();
+    const matchIdx = q ? nameLC.indexOf(q) : -1;
+
+    // Highlight matched portion of account name
+    const nameEl = matchIdx >= 0 ? (
+      <span>
+        {node.account_name.slice(0, matchIdx)}
+        <mark style={{ background: 'rgba(167,139,250,0.35)', color: 'inherit', borderRadius: '2px', padding: '0 1px' }}>
+          {node.account_name.slice(matchIdx, matchIdx + q.length)}
+        </mark>
+        {node.account_name.slice(matchIdx + q.length)}
+      </span>
+    ) : node.account_name;
+
+    return (
+      <div key={node.account_id}>
+        <label
+          className="filter-option"
+          style={{ paddingLeft: `${12 + depth * 14}px`, gap: '6px', alignItems: 'center' }}
+        >
+          {hasChildren ? (
+            <button
+              onClick={(e) => { e.preventDefault(); if (!q) toggle(node.account_id); }}
+              style={{
+                background: 'none', border: 'none', cursor: q ? 'default' : 'pointer',
+                padding: '0 2px', color: 'var(--text-secondary)',
+                fontSize: '10px', lineHeight: 1, flexShrink: 0
+              }}
+              title={isExpanded ? 'Collapse' : 'Expand'}
+            >
+              {isExpanded ? '▾' : '▸'}
+            </button>
+          ) : (
+            <span style={{ width: '14px', flexShrink: 0 }} />
+          )}
+          <input
+            type="checkbox"
+            checked={isSelected}
+            onChange={() => onToggle(node.account_id)}
+            style={{ flexShrink: 0 }}
+          />
+          <span style={{ fontSize: '12.5px', color: depth === 0 ? 'var(--text-primary)' : 'var(--text-secondary)', fontWeight: depth === 0 ? 600 : 400 }}>
+            {nameEl}
+          </span>
+        </label>
+        {hasChildren && isExpanded && node.children
+          .filter(child => nodeMatches(child))
+          .sort((a, b) => a.account_name.localeCompare(b.account_name))
+          .map(child => renderNode(child, depth + 1))}
+      </div>
+    );
+  };
+
+  const visibleRoots = roots
+    .filter(root => nodeMatches(root))
+    .sort((a, b) => a.account_name.localeCompare(b.account_name));
+
+  return (
+    <div style={{ maxHeight: '220px', overflowY: 'auto', paddingBottom: '4px' }}>
+      {visibleRoots.length === 0
+        ? <div style={{ padding: '8px 12px', fontSize: '12px', color: 'var(--text-secondary)' }}>No matching accounts</div>
+        : visibleRoots.map(root => renderNode(root))}
+    </div>
+  );
+};
+
 const Transactions = () => {
   const navigate = useNavigate();
+  const location = useLocation();  // read nav state BEFORE lazy useState inits below
+  const [searchParams, setSearchParams] = useSearchParams();
   const { toasts, showToast } = useToast();
   const [isCategorizing, setIsCategorizing] = useState(() => {
     return localStorage.getItem('isCategorizing') === 'true';
@@ -97,8 +218,18 @@ const Transactions = () => {
   const filterRef = useRef(null);
   const [filterAccounts, setFilterAccounts] = useState([]); // { account_id, account_name }
   const [filterDocuments, setFilterDocuments] = useState([]); // { document_id, file_name }
-  const [selectedAccountIds, setSelectedAccountIds] = useState(new Set());
+  const [selectedAccountIds, setSelectedAccountIds] = useState(() => {
+    // Seeded from Accounts page navigation state (srcAccId = bank/CC account)
+    const id = location.state?.srcAccId;
+    return id ? new Set([id]) : new Set();
+  });
   const [selectedDocIds, setSelectedDocIds] = useState(new Set());
+  const [selectedOffsetAccountIds, setSelectedOffsetAccountIds] = useState(() => {
+    // Seeded from Accounts page navigation state (destAccId = COA account)
+    const id = location.state?.destAccId;
+    return id ? new Set([id]) : new Set();
+  }); // dest-account filter
+  const [offsetAccountSearch, setOffsetAccountSearch] = useState(''); // search within dest-account tree
   const [txnTypeFilter, setTxnTypeFilter] = useState('ALL'); // 'ALL' | 'DEBIT' | 'CREDIT'
   const [searchQuery, setSearchQuery] = useState('');
   const [dateSortOrder, setDateSortOrder] = useState('desc'); // 'asc' | 'desc'
@@ -268,6 +399,14 @@ const Transactions = () => {
     loadAllAccounts();
   }, []);
 
+  // Clear the navigation state from history so the filter isn't re-applied
+  // on back/forward navigation (the filter is already in React state).
+  useEffect(() => {
+    if (location.state?.srcAccId || location.state?.destAccId) {
+      navigate(location.pathname, { replace: true, state: {} });
+    }
+  }, []);
+
   // Close popups on outside click
   useEffect(() => {
     const handleClickOutside = (e) => {
@@ -298,13 +437,59 @@ const Transactions = () => {
     });
   };
 
+  const toggleOffsetAccountFilter = (id) => {
+    setSelectedOffsetAccountIds(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  // Returns the set of account_ids that are the given root OR any descendant of it
+  const getDescendantIds = (rootId, allAccounts) => {
+    const result = new Set([rootId]);
+    const queue = [rootId];
+    while (queue.length > 0) {
+      const current = queue.shift();
+      allAccounts.forEach(acc => {
+        if (acc.parent_account_id === current && !result.has(acc.account_id)) {
+          result.add(acc.account_id);
+          queue.push(acc.account_id);
+        }
+      });
+    }
+    return result;
+  };
+
+  // Expanded set of all offset account ids that should pass the filter
+  // (i.e. any selected account + all its descendants)
+  const expandedOffsetIds = React.useMemo(() => {
+    if (selectedOffsetAccountIds.size === 0) return new Set();
+    const expanded = new Set();
+    selectedOffsetAccountIds.forEach(id => {
+      getDescendantIds(id, cachedAccounts).forEach(d => expanded.add(d));
+    });
+    return expanded;
+  }, [selectedOffsetAccountIds, cachedAccounts]);
+
+  // Same expansion for the source (bank/CC) account filter
+  const expandedSrcIds = React.useMemo(() => {
+    if (selectedAccountIds.size === 0) return new Set();
+    const expanded = new Set();
+    selectedAccountIds.forEach(id => {
+      getDescendantIds(id, cachedAccounts).forEach(d => expanded.add(d));
+    });
+    return expanded;
+  }, [selectedAccountIds, cachedAccounts]);
+
   const clearAllFilters = () => {
     setSelectedAccountIds(new Set());
     setSelectedDocIds(new Set());
+    setSelectedOffsetAccountIds(new Set());
     setTxnTypeFilter('ALL');
   };
 
-  const activeFilterCount = selectedAccountIds.size + selectedDocIds.size + (txnTypeFilter !== 'ALL' ? 1 : 0);
+  const activeFilterCount = selectedAccountIds.size + selectedDocIds.size + selectedOffsetAccountIds.size + (txnTypeFilter !== 'ALL' ? 1 : 0);
 
   const handleAccountCreated = (newAccount) => {
     setCachedAccounts(prev => [...prev, newAccount]);
@@ -764,10 +949,18 @@ const Transactions = () => {
       if (dateRange.end && tDate > dateRange.end) return false;
     }
 
-    if (selectedAccountIds.size > 0 && !selectedAccountIds.has(txn.account_id)) return false;
+    // Wait for cachedAccounts to be loaded before applying account-expansion filters
+    // (descendant expansion is meaningless until the account tree is available)
+    const accountsReady = cachedAccounts.length > 0;
+    if (accountsReady && expandedSrcIds.size > 0 && !expandedSrcIds.has(txn.account_id)) return false;
     if (selectedDocIds.size > 0 && !selectedDocIds.has(txn.document_id)) return false;
     if (txnTypeFilter === 'DEBIT' && !(txn.debit > 0)) return false;
     if (txnTypeFilter === 'CREDIT' && !(txn.credit > 0)) return false;
+    // Destination (offset) account filter — includes sub-accounts
+    if (accountsReady && expandedOffsetIds.size > 0) {
+      const offsetId = isCategorised ? txn.transactions[0]?.offset_account_id : null;
+      if (!offsetId || !expandedOffsetIds.has(offsetId)) return false;
+    }
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       if (txn.details && txn.details.toLowerCase().includes(q)) return true;
@@ -1071,7 +1264,7 @@ const Transactions = () => {
 
               {filterAccounts.length > 0 && (
                 <div className="filter-group">
-                  <div className="filter-group-label">Bank Account</div>
+                  <div className="filter-group-label">Bank Account / Credit Card</div>
                   {filterAccounts.map(acc => (
                     <label key={acc.account_id} className="filter-option">
                       <input
@@ -1100,6 +1293,51 @@ const Transactions = () => {
                       </span>
                     </label>
                   ))}
+                </div>
+              )}
+
+              {/* ── Destination (Offset) Account ── */}
+              {cachedAccounts.length > 0 && (
+                <div className="filter-group">
+                  <div className="filter-group-label" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span>Destination Account</span>
+                    {selectedOffsetAccountIds.size > 0 && (
+                      <button
+                        className="filter-clear-btn"
+                        style={{ fontSize: '10px', padding: '1px 6px' }}
+                        onClick={() => setSelectedOffsetAccountIds(new Set())}
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                  {/* Inline search for the account tree */}
+                  <div style={{ padding: '0 12px 6px' }}>
+                    <input
+                      type="text"
+                      placeholder="Search accounts…"
+                      value={offsetAccountSearch}
+                      onChange={e => setOffsetAccountSearch(e.target.value)}
+                      onClick={e => e.stopPropagation()}
+                      style={{
+                        width: '100%',
+                        padding: '5px 9px',
+                        fontSize: '12px',
+                        borderRadius: '6px',
+                        border: '1px solid var(--glass-border)',
+                        background: 'var(--bg-secondary)',
+                        color: 'var(--text-primary)',
+                        outline: 'none',
+                        boxSizing: 'border-box',
+                      }}
+                    />
+                  </div>
+                  <OffsetAccountTree
+                    accounts={cachedAccounts}
+                    selectedIds={selectedOffsetAccountIds}
+                    onToggle={toggleOffsetAccountFilter}
+                    searchQuery={offsetAccountSearch}
+                  />
                 </div>
               )}
             </div>

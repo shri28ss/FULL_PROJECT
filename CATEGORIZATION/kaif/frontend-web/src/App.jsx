@@ -135,7 +135,7 @@ function App() {
   return (
     <ParsingProvider>
       <Routes>
-        <Route path="/auth" element={user && (window.location.pathname.startsWith('/auth')) ? <Navigate to="/" replace /> : <AuthLayout />}>
+        <Route path="/auth" element={user && (window.location.pathname.startsWith('/auth')) ? <Navigate to={role === 'QC' ? "/qc" : "/"} replace /> : <AuthLayout />}>
            <Route index element={<AuthPage toggleTheme={toggleTheme} isDarkMode={isDarkMode} />} />
            <Route path="login" element={<AuthPage toggleTheme={toggleTheme} isDarkMode={isDarkMode} />} />
         </Route>
@@ -149,7 +149,7 @@ function App() {
         </Route>
 
         <Route path="/" element={
-            <ProtectedRoute>
+            <ProtectedRoute allowedRoles={['USER', 'ADMIN']}>
                <ModuleGuard 
                   hasModules={hasModules} 
                   hasIdentifiers={hasIdentifiers} 
