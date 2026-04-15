@@ -73,23 +73,11 @@ def _get_table_columns_fingerprint(identifier_json: dict) -> str:
     return "|".join(normalised)
 
 
-def _format_name_token_similarity(name_a: str, name_b: str) -> float:
-    def _tokenise(name: str) -> set:
-        s = re.sub(r"[_\s]v\d+$", "", name.strip(), flags=re.IGNORECASE)
-        return set(re.split(r"[_\s]+", s.lower())) - {""}
 
-    tokens_a = _tokenise(name_a)
-    tokens_b = _tokenise(name_b)
-    if not tokens_a or not tokens_b:
-        return 0.0
-    intersection = tokens_a & tokens_b
-    union        = tokens_a | tokens_b
-    return len(intersection) / len(union)
 
 
 def check_format_exists(
     new_identifier_json: dict,
-    format_name_similarity_threshold: float = 0.65,
 ) -> Optional[Dict]:
     raw_inst      = new_identifier_json.get("institution_name") or ""
     new_norm_inst = normalise_institution_name(raw_inst)
@@ -103,8 +91,6 @@ def check_format_exists(
         logger.debug("check_format_exists: no table columns in new doc — skip")
         return None
 
-    new_format_name = new_identifier_json.get("id") or ""
-
     try:
         all_rows: List[Dict] = get_all_matchable_formats()
     except Exception as exc:
@@ -117,17 +103,8 @@ def check_format_exists(
         if stored_norm_inst != new_norm_inst:
             continue
 
-        stored_format_name = row.get("format_name") or ""
-        sim = _format_name_token_similarity(stored_format_name, new_format_name)
-        if sim < format_name_similarity_threshold:
-            logger.debug(
-                "check_format_exists: fmt_sim=%.2f < %.2f ('%s' vs '%s') — skip",
-                sim, format_name_similarity_threshold, stored_format_name, new_format_name,
-            )
-            continue
-
         stored_col_fp = _get_table_columns_fingerprint(
-            row.get("identifier_json") or {}
+            row.get("statement_identifier") or {}
         )
         if stored_col_fp != new_col_fp:
             logger.debug(
@@ -137,8 +114,8 @@ def check_format_exists(
             continue
 
         logger.info(
-            "check_format_exists: MATCH — institution=%s fmt_sim=%.2f col_fp=%s",
-            new_norm_inst, sim, new_col_fp,
+            "check_format_exists: MATCH — institution=%s col_fp=%s",
+            new_norm_inst, new_col_fp,
         )
         return row
 
@@ -171,7 +148,7 @@ TASK: Generate Document Identification Markers
 Study the document carefully and extract ALL identifying characteristics.
 
 DOCUMENT FAMILIES (pick exactly one):
-- BANK_ACCOUNT_STATEMENT
+- BANK_STATEMENT
 - CREDIT_CARD_STATEMENT
 - LOAN_STATEMENT
 - WALLET_STATEMENT
@@ -258,7 +235,7 @@ Analyze this financial statement and generate identification markers:
 {first_pages_text}
 """
 
-    raw = call_llm(prompt=prompt, model=CLASSIFIER_MODEL, temperature=0)
+    raw = call_llm(prompt=prompt,temperature=0)
 
     # ── Clean and parse the LLM JSON response ────────────────────────────────
     def _clean_json(s: str) -> str:
