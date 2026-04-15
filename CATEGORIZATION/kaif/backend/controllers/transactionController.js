@@ -745,7 +745,7 @@ async function manualCategorizeTransaction(req, res) {
 async function correctTransaction(req, res) {
   try {
     const { uncategorized_transaction_id } = req.params;
-    const { amount, transaction_type } = req.body;
+    const { amount, transaction_type, details, txn_date, base_account_id, user_note } = req.body;
     const userId = req.user?.id;
 
     if (!userId) {
@@ -756,11 +756,14 @@ async function correctTransaction(req, res) {
     if (!uncategorized_transaction_id) {
       return res.status(400).json({ error: 'Missing uncategorized_transaction_id.' });
     }
-    if (amount === undefined && transaction_type === undefined) {
-      return res.status(400).json({ error: 'At least one of amount or transaction_type must be provided.' });
+    const hasAnyField = amount !== undefined || transaction_type !== undefined ||
+                        details !== undefined || txn_date !== undefined ||
+                        base_account_id !== undefined || user_note !== undefined;
+    if (!hasAnyField) {
+      return res.status(400).json({ error: 'At least one correctable field must be provided.' });
     }
-    if (amount !== undefined && (isNaN(amount) || Number(amount) <= 0)) {
-      return res.status(400).json({ error: 'Amount must be a positive number.' });
+    if (amount !== undefined && (isNaN(amount) || Number(amount) < 0)) {
+      return res.status(400).json({ error: 'Amount must be a non-negative number.' });
     }
     if (transaction_type !== undefined && !['DEBIT', 'CREDIT'].includes(transaction_type)) {
       return res.status(400).json({ error: 'transaction_type must be DEBIT or CREDIT.' });
@@ -769,7 +772,7 @@ async function correctTransaction(req, res) {
     // ── 1. Fetch the existing transactions row ─────────────────────────────────
     const { data: existingTxn, error: fetchError } = await supabase
       .from('transactions')
-      .select('transaction_id, posting_status, is_contra, amount, transaction_type')
+      .select('transaction_id, posting_status, is_contra, amount, transaction_type, user_note')
       .eq('uncategorized_transaction_id', uncategorized_transaction_id)
       .eq('user_id', userId)
       .maybeSingle();
@@ -778,6 +781,10 @@ async function correctTransaction(req, res) {
       console.error('correctTransaction fetch error:', fetchError);
       return res.status(500).json({ error: 'Failed to fetch transaction.' });
     }
+
+    // Preserve user_note across the clean-slate cycle.
+    // Priority: new note from request > existing note on the transactions row.
+    const preservedNote = user_note !== undefined ? user_note : (existingTxn?.user_note || null);
 
     if (existingTxn) {
       // Guard: Block edits on POSTED transactions
@@ -820,20 +827,34 @@ async function correctTransaction(req, res) {
     // If no transactions row exists yet (still PENDING), we still correct the source.
 
     // ── 4. Build the corrected uncategorized_transaction update ───────────────
+    // Only re-derive and write debit/credit when the caller explicitly sent
+    // amount or transaction_type. If neither was provided, leave the original
+    // columns alone — otherwise an uncategorised row (where existingTxn is null)
+    // would get finalType=undefined/finalAmount=undefined, wiping the DB values.
     const finalType = transaction_type || existingTxn?.transaction_type;
-    const finalAmount = amount !== undefined ? parseFloat(Number(amount).toFixed(2)) : (existingTxn?.amount);
+    const finalAmount = amount !== undefined
+      ? parseFloat(Number(amount).toFixed(2))
+      : existingTxn?.amount;
 
     const uncatUpdate = {
       status: 'PENDING'
     };
 
-    if (finalType === 'DEBIT') {
-      uncatUpdate.debit = finalAmount;
-      uncatUpdate.credit = null;
-    } else {
-      uncatUpdate.credit = finalAmount;
-      uncatUpdate.debit = null;
+    // Amount / type fields — only touch debit/credit if the user changed them
+    if (amount !== undefined || transaction_type !== undefined) {
+      if (finalType === 'DEBIT') {
+        uncatUpdate.debit  = finalAmount;
+        uncatUpdate.credit = null;
+      } else {
+        uncatUpdate.credit = finalAmount;
+        uncatUpdate.debit  = null;
+      }
     }
+
+    // Extended editable fields
+    if (details !== undefined)       uncatUpdate.details      = details;
+    if (txn_date !== undefined)      uncatUpdate.txn_date     = txn_date;
+    if (base_account_id !== undefined) uncatUpdate.account_id  = base_account_id;
 
     const { error: uncatUpdateError } = await supabase
       .from('uncategorized_transactions')
@@ -851,15 +872,64 @@ async function correctTransaction(req, res) {
     return res.status(200).json({
       success: true,
       message: 'Transaction corrected and reset to PENDING. Please re-categorize.',
+      preserved_note: preservedNote,
       corrected: {
         uncategorized_transaction_id,
         transaction_type: finalType,
-        amount: finalAmount
+        amount: finalAmount,
+        details: uncatUpdate.details,
+        txn_date: uncatUpdate.txn_date,
+        account_id: uncatUpdate.account_id
       }
     });
 
   } catch (err) {
     console.error('Unexpected error in correctTransaction:', err);
+    return res.status(500).json({ error: 'Internal server error.' });
+  }
+}
+
+/**
+ * updateTransactionNote(req, res)
+ * Updates only the user_note field on an already-approved or already-categorised
+ * transactions row. Does NOT trigger a clean-slate correction cycle.
+ * Route: PATCH /transactions/:transaction_id/note
+ */
+async function updateTransactionNote(req, res) {
+  try {
+    const { transaction_id } = req.params;
+    const { user_note } = req.body;
+    const userId = req.user?.id;
+
+    if (!userId) {
+      return res.status(401).json({ error: 'User authentication failed.' });
+    }
+
+    if (!transaction_id) {
+      return res.status(400).json({ error: 'Missing transaction_id.' });
+    }
+
+    if (user_note !== undefined && typeof user_note !== 'string') {
+      return res.status(400).json({ error: 'user_note must be a string.' });
+    }
+
+    const noteValue = user_note !== undefined ? user_note.slice(0, 500) : null;
+
+    const { error } = await supabase
+      .from('transactions')
+      .update({ user_note: noteValue })
+      .eq('transaction_id', transaction_id)
+      .eq('user_id', userId);
+
+    if (error) {
+      console.error('updateTransactionNote error:', error);
+      return res.status(500).json({ error: 'Failed to update note.' });
+    }
+
+    console.log(`✅ Note updated for transaction ${transaction_id}`);
+    return res.status(200).json({ success: true });
+  } catch (err) {
+    console.error('Unexpected error in updateTransactionNote:', err);
     return res.status(500).json({ error: 'Internal server error.' });
   }
 }
@@ -933,5 +1003,6 @@ module.exports = {
   bulkApproveTransactions,
   manualCategorizeTransaction,
   correctTransaction,
-  updateSourceAccount
+  updateSourceAccount,
+  updateTransactionNote
 };

@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { processUpload } = require('../controllers/bulkController');
 const { bulkUploadStatements } = require('../controllers/uploadController');
-const { recategorizeTransaction, approveTransaction, bulkApproveTransactions, manualCategorizeTransaction, correctTransaction, updateSourceAccount } = require('../controllers/transactionController');
+const { recategorizeTransaction, approveTransaction, bulkApproveTransactions, manualCategorizeTransaction, correctTransaction, updateSourceAccount, updateTransactionNote } = require('../controllers/transactionController');
 const authMiddleware = require('../middleware/authMiddleware');
 
 // 🛡️ Route: POST /upload-bulk
@@ -41,5 +41,10 @@ router.patch('/:uncategorized_transaction_id/correct', authMiddleware, correctTr
 // Updates the source account for a specific uncategorized transaction
 // Body: { account_id: id }
 router.patch('/:uncategorized_transaction_id/source-account', authMiddleware, updateSourceAccount);
+
+// 🛡️ Route: PATCH /:transaction_id/note
+// Updates only the user_note field on an existing transactions row.
+// Body: { user_note: string }
+router.patch('/:transaction_id/note', authMiddleware, updateTransactionNote);
 
 module.exports = router;

@@ -11,7 +11,7 @@ const ATTENTION_ORDER = ['HIGH', 'MEDIUM', 'LOW'];
 
 // Small inline editor that appears when the amount cell is clicked
 const AmountEditor = ({ txn, onSave, onCancel }) => {
-  const isDebit = txn.debit > 0;
+  const isDebit = txn.debit != null;
   const [editAmount, setEditAmount] = useState(isDebit ? txn.debit : txn.credit);
   const [editType, setEditType] = useState(isDebit ? 'DEBIT' : 'CREDIT');
   const [saving, setSaving] = useState(false);
@@ -21,7 +21,7 @@ const AmountEditor = ({ txn, onSave, onCancel }) => {
 
   const handleSave = async () => {
     const parsed = parseFloat(editAmount);
-    if (isNaN(parsed) || parsed <= 0) return;
+    if (isNaN(parsed) || parsed < 0) return;
     setSaving(true);
     await onSave(txn.uncategorized_transaction_id, parsed, editType);
     setSaving(false);
@@ -49,7 +49,7 @@ const AmountEditor = ({ txn, onSave, onCancel }) => {
         className="amount-editor-input"
         type="number"
         step="0.01"
-        min="0.01"
+        min="0"
         value={editAmount}
         onChange={(e) => setEditAmount(e.target.value)}
         onKeyDown={handleKey}
@@ -213,6 +213,16 @@ const Transactions = () => {
   const [similarPickerTarget, setSimilarPickerTarget] = useState(null);
   const [isApprovingSimilar, setIsApprovingSimilar] = useState(false);
 
+  // ── Manual Review popup state ─────────────────────────────────────
+  const [isReviewOpen, setIsReviewOpen] = useState(false);
+  const [reviewQueue, setReviewQueue] = useState([]);
+  const [reviewIndex, setReviewIndex] = useState(0);
+  const [reviewEditState, setReviewEditState] = useState({}); // keyed by uncategorized_transaction_id
+  const [reviewPickerField, setReviewPickerField] = useState(null); // 'src' | 'dest'
+  const [reviewValidationMsg, setReviewValidationMsg] = useState('');
+  const [reviewApproving, setReviewApproving] = useState(false);
+  const [reviewDone, setReviewDone] = useState(false);
+
   // ── Filter popup state ────────────────────────────────────────
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const filterRef = useRef(null);
@@ -300,6 +310,7 @@ const Transactions = () => {
           credit,
           document_id,
           account_id,
+          merchant_group_id,
           source_account:account_id ( account_id, account_name ),
           source_document:document_id ( document_id, file_name ),
           transactions!uncategorized_transaction_id (
@@ -309,6 +320,7 @@ const Transactions = () => {
             offset_account_id,
             categorised_by,
             is_uncategorised,
+            user_note,
             accounts:offset_account_id (
               account_name
             )
@@ -885,7 +897,6 @@ const Transactions = () => {
     }
   };
 
-  // Correct amount/type — clicking on the amount cell triggers this
   const handleCorrect = (uncategorizedTransactionId, amount, transaction_type) => {
     const prevTxn = transactions.find(t => t.uncategorized_transaction_id === uncategorizedTransactionId);
     // Update immediately
@@ -938,6 +949,451 @@ const Transactions = () => {
       }
     })();
   };
+
+  // ── Manual Review helpers ─────────────────────────────────────────
+
+  /**
+   * Build the ordered review queue.
+   *
+   * CATEGORISED rows (have a non-APPROVED transactions row):
+   *   1. Sort by attention_level HIGH→MEDIUM→LOW
+   *   2. Within same level, sort by txn_date ascending
+   *   3. Walk the sorted list; when a txn is first encountered, immediately
+   *      pull in all its remaining siblings (same merchant_group_id) so they
+   *      appear consecutively. The "stored index" (position in the primary
+   *      sorted list) is only advanced after the full sibling group is done.
+   *
+   * UNCATEGORISED rows (no transactions row at all):
+   *   1. Sort by txn_date ascending
+   *   2. Within the same date, group by merchant_group_id
+   *
+   * Categorised rows come before uncategorised rows in the final queue.
+   */
+  const buildReviewQueue = () => {
+    const ATTENTION_RANK = { HIGH: 0, MEDIUM: 1, LOW: 2 };
+    const categorised = [];
+    const uncategorised = [];
+
+    transactions.forEach(txn => {
+      const txnRow = txn.transactions?.[0];
+      if (txnRow && txnRow.review_status !== 'APPROVED') {
+        categorised.push(txn);
+      } else if (!txn.transactions || txn.transactions.length === 0) {
+        uncategorised.push(txn);
+      }
+    });
+
+    // ── CATEGORISED: attention_level → txn_date, then sibling-walk ────────────
+    categorised.sort((a, b) => {
+      const aRow = a.transactions[0];
+      const bRow = b.transactions[0];
+      const attRank =
+        (ATTENTION_RANK[aRow.attention_level] ?? 2) -
+        (ATTENTION_RANK[bRow.attention_level] ?? 2);
+      if (attRank !== 0) return attRank;
+      return new Date(a.txn_date).getTime() - new Date(b.txn_date).getTime();
+    });
+
+    // Walk the sorted list. When a txn is first seen, immediately pull ALL of
+    // its remaining siblings (any date, same attention_level bucket) right
+    // after it. The outer loop index i ("stored index") only advances once
+    // all siblings of that group have been collected.
+    const catResult = [];
+    const catSeen = new Set();
+    for (let i = 0; i < categorised.length; i++) {
+      const txn = categorised[i];
+      if (catSeen.has(txn.uncategorized_transaction_id)) continue; // already pulled in as a sibling
+      catResult.push(txn);
+      catSeen.add(txn.uncategorized_transaction_id);
+      // Pull remaining siblings before advancing i
+      if (txn.merchant_group_id) {
+        for (let j = i + 1; j < categorised.length; j++) {
+          const sib = categorised[j];
+          if (
+            sib.merchant_group_id === txn.merchant_group_id &&
+            !catSeen.has(sib.uncategorized_transaction_id)
+          ) {
+            catResult.push(sib);
+            catSeen.add(sib.uncategorized_transaction_id);
+          }
+        }
+      }
+      // i increments naturally — siblings already in catSeen are skipped by the guard above
+    }
+
+    // ── UNCATEGORISED: txn_date → merchant_group_id (within same date) ───────
+    uncategorised.sort((a, b) => {
+      const dateD =
+        new Date(a.txn_date).getTime() - new Date(b.txn_date).getTime();
+      if (dateD !== 0) return dateD;
+      // Within the same date, group siblings together
+      const aGrp = a.merchant_group_id || '';
+      const bGrp = b.merchant_group_id || '';
+      return aGrp.localeCompare(bGrp);
+    });
+
+    return [...catResult, ...uncategorised];
+  };
+
+  const openReview = () => {
+    const queue = buildReviewQueue();
+    setReviewQueue(queue);
+    setReviewIndex(0);
+    setReviewEditState({});
+    setReviewValidationMsg('');
+    setReviewDone(false);
+    setIsReviewOpen(true);
+  };
+
+  const closeReview = () => {
+    setIsReviewOpen(false);
+    setReviewPickerField(null);
+    setReviewValidationMsg('');
+    setReviewApproving(false);
+    fetchTransactions(activeFilter, true);
+  };
+
+  /** Patch the editState for current card */
+  const patchReviewEdit = (uncatId, patch) => {
+    setReviewEditState(prev => ({
+      ...prev,
+      [uncatId]: { ...(prev[uncatId] || {}), ...patch }
+    }));
+  };
+
+  /**
+   * Save any pending edits (except note-only) via the correct endpoint.
+   * Returns the API response data (or null on failure).
+   */
+  const saveReviewCorrection = async (txn, edits) => {
+    const uncatId = txn.uncategorized_transaction_id;
+    const body = {};
+    if (edits.amount !== undefined)         body.amount           = edits.amount;
+    if (edits.transaction_type !== undefined) body.transaction_type = edits.transaction_type;
+    if (edits.details !== undefined)        body.details          = edits.details;
+    if (edits.txn_date !== undefined)       body.txn_date         = edits.txn_date;
+    if (edits.base_account_id !== undefined) body.base_account_id  = edits.base_account_id;
+    if (edits.user_note !== undefined)      body.user_note        = edits.user_note;
+
+    if (Object.keys(body).length === 0) return null;
+
+    const { data: { session } } = await supabase.auth.getSession();
+    const res = await fetch(`${API_BASE_URL}/api/transactions/${uncatId}/correct`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session?.access_token || ''}` },
+      body: JSON.stringify(body)
+    });
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.error || 'Correction failed');
+    return json;
+  };
+
+  /**
+   * Save just the note for an already-approved transaction.
+   */
+  const saveNoteOnly = async (transactionId, note) => {
+    const { data: { session } } = await supabase.auth.getSession();
+    const res = await fetch(`${API_BASE_URL}/api/transactions/${transactionId}/note`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session?.access_token || ''}` },
+      body: JSON.stringify({ user_note: note })
+    });
+    if (!res.ok) throw new Error('Failed to save note');
+  };
+
+  /** Fire the approve API for a categorised row. */
+  const approveReviewTxn = async (transactionId) => {
+    const { data: { session } } = await supabase.auth.getSession();
+    const res = await fetch(`${API_BASE_URL}/api/transactions/${transactionId}/approve`, {
+      method: 'PATCH',
+      headers: { 'Authorization': `Bearer ${session?.access_token || ''}` }
+    });
+    if (!res.ok) {
+      const json = await res.json();
+      throw new Error(json.error || 'Approve failed');
+    }
+  };
+
+  /** Fire the manual-categorize API for an uncategorised row. */
+  const manualCategorizeReviewTxn = async (uncatId, offsetAccountId) => {
+    const { data: { session } } = await supabase.auth.getSession();
+    const res = await fetch(`${API_BASE_URL}/api/transactions/manual-categorize`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session?.access_token || ''}` },
+      body: JSON.stringify({ uncategorized_transaction_id: uncatId, offset_account_id: offsetAccountId })
+    });
+    if (!res.ok) {
+      const json = await res.json();
+      throw new Error(json.error || 'Categorize failed');
+    }
+  };
+
+  /**
+   * Skip handler — discard in-flight edits and move card to end of queue.
+   * Nothing is saved to the DB.
+   */
+  const handleReviewSkip = () => {
+    const current = reviewQueue[reviewIndex];
+    if (!current) return;
+    const uncatId = current.uncategorized_transaction_id;
+
+    // Discard edits for this card so they don’t linger when it comes back
+    setReviewEditState(prev => {
+      const next = { ...prev };
+      delete next[uncatId];
+      return next;
+    });
+
+    // Move card to end of queue
+    setReviewQueue(prev => {
+      const next = [...prev];
+      const [card] = next.splice(reviewIndex, 1);
+      next.push({ ...card, _siblingPrefill: undefined });
+      return next;
+    });
+
+    // Index stays at same position, which now points to the next card
+    setReviewIndex(prev => Math.min(prev, reviewQueue.length - 2));
+    setReviewValidationMsg('');
+  };
+
+  /**
+   * Save & Skip handler — persist any in-flight edits to the DB, then move
+   * the card to the end of the queue without approving it.
+   */
+  const handleReviewSaveAndSkip = async () => {
+    const current = reviewQueue[reviewIndex];
+    if (!current) return;
+    const uncatId = current.uncategorized_transaction_id;
+    const edits = reviewEditState[uncatId] || {};
+    const txnRow = current.transactions?.[0];
+
+    const CORRECTION_FIELDS = ['amount', 'transaction_type', 'details', 'txn_date', 'base_account_id', 'user_note'];
+    const correctionEdits = Object.fromEntries(
+      Object.entries(edits).filter(([k]) => CORRECTION_FIELDS.includes(k))
+    );
+    const hasCorrectionEdits = Object.keys(correctionEdits).length > 0;
+    const noteOnly = hasCorrectionEdits &&
+      Object.keys(correctionEdits).length === 1 &&
+      correctionEdits.user_note !== undefined;
+
+    setReviewApproving(true);
+    try {
+      if (hasCorrectionEdits && !noteOnly) {
+        await saveReviewCorrection(current, correctionEdits);
+      } else if (hasCorrectionEdits && noteOnly && txnRow?.transaction_id) {
+        await saveNoteOnly(txnRow.transaction_id, correctionEdits.user_note);
+      }
+      // offset_account_id change alone is deferred to Approve — nothing to save here
+    } catch (err) {
+      showToast(err.message || 'Failed to save', 'error');
+      setReviewApproving(false);
+      return;
+    }
+    setReviewApproving(false);
+
+    // Clear edits (they’re now persisted) and move card to end of queue
+    setReviewEditState(prev => {
+      const next = { ...prev };
+      delete next[uncatId];
+      return next;
+    });
+    setReviewQueue(prev => {
+      const next = [...prev];
+      const [card] = next.splice(reviewIndex, 1);
+      next.push({ ...card, _siblingPrefill: undefined });
+      return next;
+    });
+    setReviewIndex(prev => Math.min(prev, reviewQueue.length - 2));
+    setReviewValidationMsg('');
+  };
+
+  /**
+   * Approve & Next handler — the main action button.
+   */
+  const handleReviewApprove = async () => {
+    const current = reviewQueue[reviewIndex];
+    if (!current) return;
+    const uncatId = current.uncategorized_transaction_id;
+    const edits = reviewEditState[uncatId] || {};
+    const txnRow = current.transactions?.[0];
+    const isCategorised = !!txnRow;
+
+    // Resolve target offset_account_id
+    const offsetAccountId = edits.offset_account_id ?? (isCategorised ? txnRow?.offset_account_id : null);
+    const offsetAccountName = edits._offset_account_name ??
+      (isCategorised ? txnRow?.accounts?.account_name : null);
+
+    if (!offsetAccountId) {
+      setReviewValidationMsg('Please assign a category before approving');
+      return;
+    }
+    setReviewValidationMsg('');
+    setReviewApproving(true);
+
+    try {
+      // ── Classify edits ─────────────────────────────────────────────────────
+      // CORRECTION_FIELDS go to PATCH /correct and may trigger a clean-slate.
+      // offset_account_id is NOT a correction field — it routes to recategorize
+      // or manual-categorize. Including it in coreEdits was causing the bug where
+      // manualCategorizeReviewTxn was called on an already-categorised transaction,
+      // hitting the unique constraint and silently leaving the wrong account.
+      const CORRECTION_FIELDS = ['amount', 'transaction_type', 'details', 'txn_date', 'base_account_id', 'user_note'];
+      const correctionEdits = Object.fromEntries(
+        Object.entries(edits).filter(([k]) => CORRECTION_FIELDS.includes(k))
+      );
+      const hasCorrectionEdits = Object.keys(correctionEdits).length > 0;
+      const noteOnly = hasCorrectionEdits &&
+        Object.keys(correctionEdits).length === 1 &&
+        correctionEdits.user_note !== undefined;
+      const offsetChanged = edits.offset_account_id !== undefined;
+
+      // ── Step 1: Structural correction (triggers clean-slate) ───────────────
+      let cleanSlateHappened = false;
+      let preservedNote = edits.user_note;
+
+      if (hasCorrectionEdits && !noteOnly) {
+        const correctResult = await saveReviewCorrection(current, correctionEdits);
+        if (correctResult !== null) {
+          // /correct deleted the transactions row — need a fresh manualCategorize
+          cleanSlateHappened = true;
+        }
+        if (correctResult?.preserved_note !== undefined && edits.user_note === undefined) {
+          preservedNote = correctResult.preserved_note;
+        }
+      }
+
+      // ── Step 2: Note-only save (no clean-slate) ────────────────────────────
+      if (hasCorrectionEdits && noteOnly && txnRow?.transaction_id) {
+        await saveNoteOnly(txnRow.transaction_id, correctionEdits.user_note);
+      }
+
+      // ── Step 3: Approve / categorize ──────────────────────────────────────
+      if (!isCategorised || cleanSlateHappened) {
+        // Uncategorised row, or the transactions row was just deleted by /correct.
+        // Create a fresh transactions row via manual-categorize.
+        await manualCategorizeReviewTxn(uncatId, offsetAccountId);
+
+        // Re-apply preserved note on the newly created transactions row
+        if (preservedNote) {
+          (async () => {
+            try {
+              const { data: { user } } = await supabase.auth.getUser();
+              const { data: newTxn } = await supabase
+                .from('transactions')
+                .select('transaction_id')
+                .eq('uncategorized_transaction_id', uncatId)
+                .eq('user_id', user.id)
+                .maybeSingle();
+              if (newTxn?.transaction_id) {
+                await saveNoteOnly(newTxn.transaction_id, preservedNote);
+              }
+            } catch {}
+          })();
+        }
+      } else if (offsetChanged) {
+        // Categorised PENDING — user picked a different destination account.
+        // Recategorize (updates the existing transactions row), then approve.
+        const { data: { session } } = await supabase.auth.getSession();
+        const recatRes = await fetch(
+          `${API_BASE_URL}/api/transactions/${txnRow.transaction_id}/recategorize`,
+          {
+            method: 'PATCH',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${session?.access_token || ''}`
+            },
+            body: JSON.stringify({ offset_account_id: offsetAccountId })
+          }
+        );
+        if (!recatRes.ok) {
+          const json = await recatRes.json();
+          throw new Error(json.error || 'Recategorize failed');
+        }
+        await approveReviewTxn(txnRow.transaction_id);
+      } else {
+        // Categorised PENDING, no offset change — pure approval (or note-only).
+        await approveReviewTxn(txnRow.transaction_id);
+      }
+
+      // ── Step 4+5: Pre-fill next sibling (if same group) then advance queue ───
+      //
+      // Only look at the IMMEDIATE next card. When the user approves that one,
+      // the same logic fires for the card after it — cascading naturally.
+      // Skip and Save & Skip never reach this path.
+      const nextCard = reviewQueue[reviewIndex + 1];
+      const hasSiblingNext = !!(nextCard
+        && nextCard.merchant_group_id
+        && nextCard.merchant_group_id === current.merchant_group_id);
+
+      console.log('[Review] Sibling pre-fill check:', {
+        approvedUncatId: uncatId,
+        approvedGroup: current.merchant_group_id,
+        nextCardGroup: nextCard?.merchant_group_id,
+        hasSiblingNext,
+        queueLength: reviewQueue.length,
+        reviewIndex
+      });
+      // Single queue update: remove approved card + optionally stamp sibling
+      setReviewQueue(prev => {
+        const filtered = prev.filter((_, i) => i !== reviewIndex);
+        if (!hasSiblingNext) return filtered;
+        // After removal the next card shifts to reviewIndex position
+        return filtered.map((q, i) => {
+          if (i !== reviewIndex) return q;
+          return { ...q, _siblingPrefill: { offset_account_id: offsetAccountId, account_name: offsetAccountName } };
+        });
+      });
+
+      if (reviewQueue.length - 1 === 0) {
+        setReviewDone(true);
+        setTimeout(() => closeReview(), 1500);
+      } else {
+        setReviewIndex(prev => Math.min(prev, reviewQueue.length - 2));
+        setReviewEditState(prev => {
+          const next = { ...prev };
+          // Clear the just-approved card's edits
+          delete next[uncatId];
+          // Pre-fill the next sibling's editState so approval works immediately
+          if (hasSiblingNext) {
+            const nextUncatId = nextCard.uncategorized_transaction_id;
+            const existing = next[nextUncatId];
+            // Don't overwrite if user already manually picked a non-suggested account
+            if (!existing?.offset_account_id || existing?._sibling_suggested) {
+              next[nextUncatId] = {
+                ...(existing || {}),
+                offset_account_id: offsetAccountId,
+                _offset_account_name: offsetAccountName,
+                _sibling_suggested: true
+              };
+            }
+          }
+          return next;
+        });
+      }
+    } catch (err) {
+      showToast(err.message || 'Failed to approve', 'error');
+    } finally {
+      setReviewApproving(false);
+    }
+  };
+
+  // ── Keyboard handler for the review popup ────────────────────────
+  useEffect(() => {
+    if (!isReviewOpen) return;
+    const handler = (e) => {
+      // Don’t intercept when user is typing in an input/textarea
+      const tag = document.activeElement?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (e.key === 'Escape') { e.preventDefault(); closeReview(); }
+      if (e.key === ' ')     { e.preventDefault(); handleReviewSkip(); }
+      if (e.key === 'Enter') { e.preventDefault(); handleReviewApprove(); }
+    };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isReviewOpen, reviewIndex, reviewQueue, reviewEditState]);
+
 
   const secondaryFiltered = transactions.filter((txn) => {
     const isCategorised = txn.transactions && txn.transactions.length > 0;
@@ -1035,7 +1491,8 @@ const Transactions = () => {
 
   // Renders the amount cell. Clicking opens the inline AmountEditor.
   const renderAmountCell = (txn) => {
-    const isDebit = txn.debit > 0;
+    // Use != null so that debit=0 is correctly treated as DEBIT (not credit)
+    const isDebit = txn.debit != null;
     const amount = isDebit ? txn.debit : txn.credit;
 
     if (correctingId === txn.uncategorized_transaction_id) {
@@ -1079,14 +1536,21 @@ const Transactions = () => {
           <p>Manage and categorize your bank statements and ledger entries.</p>
         </div>
         <div className="header-actions">
-          <button
-            id="transactions-upload-btn"
-            className="action-btn upload"
-            onClick={() => navigate('/parsing')}
-            style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
-          >
-            <ICONS.Upload /> Upload
-          </button>
+          {/* Review button — only visible when there are non-approved transactions */}
+          {transactions.some(t => {
+            const row = t.transactions?.[0];
+            return !row || row.review_status !== 'APPROVED';
+          }) && (
+            <button
+              id="transactions-review-btn"
+              className="action-btn review-btn"
+              onClick={openReview}
+              style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+              Review
+            </button>
+          )}
           {activeFilter === 'PENDING_APP' ? (
             <button
               className={`action-btn approve-selected ${selectedIds.size > 0 ? 'has-selection' : ''}`}
@@ -1736,6 +2200,252 @@ const Transactions = () => {
         />
       )}
       <Toast toasts={toasts} />
+
+      {/* ── Manual Review Popup ── */}
+      {isReviewOpen && (
+        <div className="review-overlay" onClick={closeReview}>
+          <div className="review-card" onClick={e => e.stopPropagation()}>
+
+            {reviewDone ? (
+              <div className="review-done-screen">
+                <div className="review-done-icon">✓</div>
+                <h2>All done</h2>
+                <p>All transactions reviewed</p>
+              </div>
+            ) : (() => {
+              const current = reviewQueue[reviewIndex];
+              if (!current) return null;
+              const uncatId = current.uncategorized_transaction_id;
+              const edits = reviewEditState[uncatId] || {};
+              const txnRow = current.transactions?.[0];
+              const isCategorised = !!txnRow;
+              const isUncategorisedAccount = txnRow?.is_uncategorised !== false;
+
+              // Resolved display values
+              const displayDate  = edits.txn_date    ?? current.txn_date?.split('T')[0] ?? '';
+              const displayDetails = edits.details   ?? current.details ?? '';
+              // Use != null so debit=0 is treated as DEBIT, not credit
+              const isDebit = edits.transaction_type
+                ? edits.transaction_type === 'DEBIT'
+                : current.debit != null;
+              const displayAmount = edits.amount ?? (current.debit != null ? current.debit : (current.credit ?? 0));
+              const displaySrcAcc = edits._src_account_name ?? current.source_account?.account_name ?? '-';
+              const displayDestAcc = edits._offset_account_name ?? (isCategorised ? txnRow?.accounts?.account_name : null);
+              const displayNote = edits.user_note    ?? txnRow?.user_note ?? '';
+              const siblingPrefill = current._siblingPrefill;
+              const isSuggested = edits._sibling_suggested;
+
+              // Status badge
+              const statusLabel = isCategorised
+                ? (txnRow.review_status === 'PENDING' ? 'Pending Approval' : txnRow.review_status)
+                : 'Pending Categorisation';
+              const statusClass = isCategorised
+                ? txnRow.review_status.toLowerCase()
+                : 'pending-categorisation';
+
+              return (
+                <>
+                  {/* Header */}
+                  <div className="review-header">
+                    <div>
+                      <h2 className="review-title">Manual Review</h2>
+                      <span className="review-progress">{reviewIndex + 1} of {reviewQueue.length}</span>
+                    </div>
+                    <button className="review-close-btn" onClick={closeReview} title="Close (Esc)">✕</button>
+                  </div>
+
+                  {/* Body */}
+                  <div className="review-body">
+
+                    {/* Date */}
+                    <div className="review-field">
+                      <label className="review-field-label">Date</label>
+                      <input
+                        type="date"
+                        className="review-input"
+                        value={displayDate}
+                        onChange={e => patchReviewEdit(uncatId, { txn_date: e.target.value })}
+                      />
+                    </div>
+
+                    {/* Details */}
+                    <div className="review-field">
+                      <label className="review-field-label">Details</label>
+                      <input
+                        type="text"
+                        className="review-input"
+                        value={displayDetails}
+                        onChange={e => patchReviewEdit(uncatId, { details: e.target.value })}
+                        placeholder="Transaction description"
+                      />
+                    </div>
+
+                    {/* Amount */}
+                    <div className="review-field">
+                      <label className="review-field-label">Amount</label>
+                      <div className="review-amount-row">
+                        <div className="review-type-toggle">
+                          <button
+                            className={`type-btn ${isDebit ? 'active debit' : ''}`}
+                            onClick={() => patchReviewEdit(uncatId, { transaction_type: 'DEBIT' })}
+                          >− Dr</button>
+                          <button
+                            className={`type-btn ${!isDebit ? 'active credit' : ''}`}
+                            onClick={() => patchReviewEdit(uncatId, { transaction_type: 'CREDIT' })}
+                          >+ Cr</button>
+                        </div>
+                        <input
+                          type="number"
+                          className="review-input"
+                          step="0.01"
+                          min="0.01"
+                          value={displayAmount}
+                          onChange={e => patchReviewEdit(uncatId, { amount: parseFloat(e.target.value) })}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Source Account */}
+                    <div className="review-field">
+                      <label className="review-field-label">Source Account</label>
+                      <button
+                        className="review-account-btn"
+                        onClick={() => setReviewPickerField('src')}
+                      >
+                        {displaySrcAcc}
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M6 9l6 6 6-6"/></svg>
+                      </button>
+                    </div>
+
+                    {/* Dest Account */}
+                    <div className="review-field">
+                      <label className="review-field-label">Category / Dest Account</label>
+                      <button
+                        className={`review-account-btn ${!displayDestAcc ? 'review-assign' : ''}`}
+                        onClick={() => setReviewPickerField('dest')}
+                      >
+                        {displayDestAcc
+                          ? (<span>{displayDestAcc} {isSuggested && <span className="review-suggested-badge">suggested</span>}</span>)
+                          : (siblingPrefill ? (<span>{siblingPrefill.account_name} <span className="review-suggested-badge">suggested</span></span>) : '+ Assign')
+                        }
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M6 9l6 6 6-6"/></svg>
+                      </button>
+                    </div>
+
+                    {/* Status (read only) */}
+                    <div className="review-field">
+                      <label className="review-field-label">Status</label>
+                      <span className={`status-badge ${statusClass}`}>{statusLabel}</span>
+                    </div>
+
+                    {/* Note */}
+                    <div className="review-field">
+                      <label className="review-field-label">Note</label>
+                      <textarea
+                        className="review-textarea"
+                        maxLength={500}
+                        rows={3}
+                        value={displayNote}
+                        onChange={e => patchReviewEdit(uncatId, { user_note: e.target.value })}
+                        placeholder="Optional note…"
+                      />
+                      <span className="review-char-count">{displayNote.length}/500</span>
+                    </div>
+
+                  </div>
+
+                  {/* Validation message */}
+                  {reviewValidationMsg && (
+                    <div className="review-validation-msg">{reviewValidationMsg}</div>
+                  )}
+
+                  {/* Footer */}
+                  <div className="review-footer">
+                    <button
+                      className="action-btn review-skip-btn"
+                      onClick={handleReviewSkip}
+                      disabled={reviewApproving}
+                      title="Skip — discard changes (Space)"
+                    >
+                      Skip
+                    </button>
+                    <button
+                      className="action-btn review-save-skip-btn"
+                      onClick={handleReviewSaveAndSkip}
+                      disabled={reviewApproving}
+                      title="Save changes and come back later"
+                    >
+                      {reviewApproving
+                        ? <><span className="spinner-small"></span> Saving…</>
+                        : 'Save & Skip'
+                      }
+                    </button>
+                    <button
+                      className="action-btn approve-selected has-selection review-approve-btn"
+                      onClick={handleReviewApprove}
+                      disabled={reviewApproving}
+                      title="Approve &amp; Next (Enter)"
+                    >
+                      {reviewApproving
+                        ? <><span className="spinner-small"></span> Approving…</>
+                        : <><ICONS.Check /> Approve &amp; Next</>
+                      }
+                    </button>
+                  </div>
+                </>
+              );
+            })()}
+
+          </div>
+
+          {/* Account pickers — rendered inside the overlay so they stack above the card */}
+          {reviewPickerField === 'src' && reviewQueue[reviewIndex] && (
+            <AccountPickerModal
+              onClose={() => setReviewPickerField(null)}
+              currentAccountId={
+                reviewEditState[reviewQueue[reviewIndex].uncategorized_transaction_id]?.base_account_id
+                ?? reviewQueue[reviewIndex].account_id
+              }
+              preloadedAccounts={cachedAccounts}
+              allowedParentAccountNames={['Bank Accounts', 'Credit Cards']}
+              onAccountCreated={handleAccountCreated}
+              onSelect={(account) => {
+                const uncatId = reviewQueue[reviewIndex].uncategorized_transaction_id;
+                patchReviewEdit(uncatId, {
+                  base_account_id: account.account_id,
+                  _src_account_name: account.account_name
+                });
+                setReviewPickerField(null);
+              }}
+            />
+          )}
+          {reviewPickerField === 'dest' && reviewQueue[reviewIndex] && (() => {
+            const cur = reviewQueue[reviewIndex];
+            const uncatId = cur.uncategorized_transaction_id;
+            const edits = reviewEditState[uncatId] || {};
+            const txnRow = cur.transactions?.[0];
+            return (
+              <AccountPickerModal
+                onClose={() => setReviewPickerField(null)}
+                currentAccountId={edits.offset_account_id ?? txnRow?.offset_account_id}
+                transactionDirection={
+                  (edits.transaction_type ?? (cur.debit > 0 ? 'DEBIT' : 'CREDIT'))
+                }
+                preloadedAccounts={cachedAccounts}
+                onAccountCreated={handleAccountCreated}
+                onSelect={(account) => {
+                  patchReviewEdit(uncatId, {
+                    offset_account_id: account.account_id,
+                    _offset_account_name: account.account_name,
+                    _sibling_suggested: false
+                  });
+                  setReviewPickerField(null);
+                }}
+              />
+            );
+          })()}
+        </div>
+      )}
     </div>
   );
 };
