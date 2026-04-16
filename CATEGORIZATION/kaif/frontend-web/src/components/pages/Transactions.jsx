@@ -223,6 +223,24 @@ const Transactions = () => {
   const [reviewApproving, setReviewApproving] = useState(false);
   const [reviewDone, setReviewDone] = useState(false);
 
+  // ── Manual Add popup state ────────────────────────────────────────
+  const EMPTY_MANUAL_FORM = {
+    txn_date: new Date().toISOString().split('T')[0],
+    details: '',
+    amount: '',
+    transaction_type: 'DEBIT',
+    base_account_id: null,
+    _src_account_name: '',
+    offset_account_id: null,
+    _offset_account_name: '',
+    user_note: '',
+  };
+  const [isManualAddOpen, setIsManualAddOpen] = useState(false);
+  const [manualAddForm, setManualAddForm] = useState(EMPTY_MANUAL_FORM);
+  const [manualAddPicker, setManualAddPicker] = useState(null); // 'src' | 'dest'
+  const [manualAddSaving, setManualAddSaving] = useState(false);
+  const [manualAddError, setManualAddError] = useState('');
+
   // ── Filter popup state ────────────────────────────────────────
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const filterRef = useRef(null);
@@ -594,7 +612,7 @@ const Transactions = () => {
       ...txn,
       transactions: [{ ...txn.transactions[0], review_status: 'APPROVED' }]
     }));
-    // Fire API in background
+    // Fire API and handle similar-txn popup
     (async () => {
       try {
         const { data: { session } } = await supabase.auth.getSession();
@@ -612,6 +630,14 @@ const Transactions = () => {
           if (prev) setTransactions(p => p.map(t =>
             t.uncategorized_transaction_id === uncatId ? prev : t
           ));
+        } else {
+          // Show similar transactions popup if the server found any
+          const result = await response.json();
+          if (result.similarTransactions?.length > 0) {
+            setSimilarTxns(result.similarTransactions);
+            setSimilarSuggestedAccount(result.suggestedAccount);
+            setSimilarAccountOverrides({});
+          }
         }
       } catch {
         showToast('Failed to approve — reverted', 'error');
@@ -621,6 +647,7 @@ const Transactions = () => {
       }
     })();
   };
+
 
   const handleBulkApprove = async () => {
     if (selectedIds.size === 0) return;
@@ -833,33 +860,65 @@ const Transactions = () => {
     setIsApprovingSimilar(true);
     try {
       const { data: { session } } = await supabase.auth.getSession();
+      const headers = {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${session?.access_token || ''}`
+      };
 
-      // Recategorise each transaction (use override if set, else suggestedAccount)
-      await Promise.all(similarTxns.map(txn => {
-        const account = similarAccountOverrides[txn.transaction_id] || similarSuggestedAccount;
-        return fetch(`${API_BASE_URL}/api/transactions/${txn.transaction_id}/recategorize`, {
-          method: 'PATCH',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${session?.access_token || ''}`
-          },
-          body: JSON.stringify({ offset_account_id: account.account_id })
+      // Split: pre-pipeline txns (no transaction_id yet) vs already-in-transactions-table
+      const prePipeline = similarTxns.filter(t => t.is_pre_pipeline);
+      const normal     = similarTxns.filter(t => !t.is_pre_pipeline);
+
+      // Pre-pipeline → manual-categorize (creates + approves in one step)
+      await Promise.all(prePipeline.map(txn => {
+        const account = similarAccountOverrides[txn.uncategorized_transaction_id] || similarSuggestedAccount;
+        return fetch(`${API_BASE_URL}/api/transactions/manual-categorize`, {
+          method: 'POST', headers,
+          body: JSON.stringify({
+            uncategorized_transaction_id: txn.uncategorized_transaction_id,
+            offset_account_id: account.account_id
+          })
         });
       }));
 
-      // Bulk approve all of them
-      await fetch(`${API_BASE_URL}/api/transactions/approve-bulk`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${session?.access_token || ''}`
-        },
-        body: JSON.stringify({ transaction_ids: similarTxns.map(t => t.transaction_id) })
-      });
+      // Normal → recategorize to apply any account override, then bulk-approve
+      if (normal.length > 0) {
+        await Promise.all(normal.map(txn => {
+          const account = similarAccountOverrides[txn.transaction_id] || similarSuggestedAccount;
+          return fetch(`${API_BASE_URL}/api/transactions/${txn.transaction_id}/recategorize`, {
+            method: 'PATCH', headers,
+            body: JSON.stringify({ offset_account_id: account.account_id })
+          });
+        }));
+        await fetch(`${API_BASE_URL}/api/transactions/approve-bulk`, {
+          method: 'POST', headers,
+          body: JSON.stringify({ transaction_ids: normal.map(t => t.transaction_id) })
+        });
+      }
 
       showToast(`${similarTxns.length} similar transactions confirmed`, 'success');
       setSimilarTxns([]);
       setSimilarSuggestedAccount(null);
+
+      // Remove confirmed transactions from the review queue so they don't show
+      // up as pending cards when the user resumes the review flow.
+      // Both pre-pipeline and normal txns now carry uncategorized_transaction_id.
+      const confirmedUncatIds = new Set(
+        similarTxns
+          .map(t => t.uncategorized_transaction_id)
+          .filter(Boolean)
+      );
+      if (confirmedUncatIds.size > 0) {
+        setReviewQueue(prev => {
+          const filtered = prev.filter(
+            q => !confirmedUncatIds.has(q.uncategorized_transaction_id)
+          );
+          // Clamp reviewIndex so it doesn't point past the end
+          setReviewIndex(i => Math.min(i, Math.max(0, filtered.length - 1)));
+          return filtered;
+        });
+      }
+
       fetchTransactions(activeFilter, true);
     } catch (err) {
       showToast('Failed to confirm similar transactions', 'error');
@@ -870,28 +929,55 @@ const Transactions = () => {
 
   const handleSimilarIndividualApprove = async (txn) => {
     try {
-      const account = similarAccountOverrides[txn.transaction_id] || similarSuggestedAccount;
       const { data: { session } } = await supabase.auth.getSession();
+      const headers = {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${session?.access_token || ''}`
+      };
+      // Unique key used to look up any per-row account override
+      const overrideKey = txn.transaction_id ?? txn.uncategorized_transaction_id;
+      const account = similarAccountOverrides[overrideKey] || similarSuggestedAccount;
 
-      await fetch(`${API_BASE_URL}/api/transactions/${txn.transaction_id}/recategorize`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${session?.access_token || ''}`
-        },
-        body: JSON.stringify({ offset_account_id: account.account_id })
-      });
+      if (txn.is_pre_pipeline) {
+        // No transactions row yet — manual-categorize creates + approves in one step
+        await fetch(`${API_BASE_URL}/api/transactions/manual-categorize`, {
+          method: 'POST', headers,
+          body: JSON.stringify({
+            uncategorized_transaction_id: txn.uncategorized_transaction_id,
+            offset_account_id: account.account_id
+          })
+        });
+      } else {
+        await fetch(`${API_BASE_URL}/api/transactions/${txn.transaction_id}/recategorize`, {
+          method: 'PATCH', headers,
+          body: JSON.stringify({ offset_account_id: account.account_id })
+        });
+        await fetch(`${API_BASE_URL}/api/transactions/${txn.transaction_id}/approve`, {
+          method: 'PATCH',
+          headers: { 'Authorization': `Bearer ${session?.access_token || ''}` }
+        });
+      }
 
-      await fetch(`${API_BASE_URL}/api/transactions/${txn.transaction_id}/approve`, {
-        method: 'PATCH',
-        headers: { 'Authorization': `Bearer ${session?.access_token || ''}` }
-      });
-
+      // Remove from similar popup list
+      const confirmedUncatId = txn.uncategorized_transaction_id;
       setSimilarTxns(prev => {
-        const remaining = prev.filter(t => t.transaction_id !== txn.transaction_id);
+        const remaining = prev.filter(t =>
+          txn.is_pre_pipeline
+            ? t.uncategorized_transaction_id !== txn.uncategorized_transaction_id
+            : t.transaction_id !== txn.transaction_id
+        );
         if (remaining.length === 0) fetchTransactions(activeFilter, true);
         return remaining;
       });
+
+      // Also remove from review queue if the txn has a matching uncategorized_transaction_id
+      if (confirmedUncatId) {
+        setReviewQueue(prev => {
+          const filtered = prev.filter(q => q.uncategorized_transaction_id !== confirmedUncatId);
+          setReviewIndex(i => Math.min(i, Math.max(0, filtered.length - 1)));
+          return filtered;
+        });
+      }
     } catch (err) {
       showToast('Failed to approve transaction', 'error');
     }
@@ -1045,6 +1131,38 @@ const Transactions = () => {
     setIsReviewOpen(true);
   };
 
+  const handleManualAddSave = async () => {
+    const { txn_date, details, amount, transaction_type, base_account_id, offset_account_id, user_note } = manualAddForm;
+    if (!txn_date) { setManualAddError('Date is required.'); return; }
+    if (!details.trim()) { setManualAddError('Details are required.'); return; }
+    if (!amount || isNaN(amount) || Number(amount) <= 0) { setManualAddError('Enter a valid positive amount.'); return; }
+    if (!base_account_id) { setManualAddError('Select a source account.'); return; }
+    if (!offset_account_id)  { setManualAddError('Select a category / dest account.'); return; }
+    setManualAddError('');
+    setManualAddSaving(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch(`${API_BASE_URL}/api/transactions/manual-add`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session?.access_token || ''}` },
+        body: JSON.stringify({ txn_date, details: details.trim(), amount: Number(amount), transaction_type, base_account_id, offset_account_id, transaction_date: txn_date, user_note: user_note || null })
+      });
+      if (!res.ok) {
+        const json = await res.json();
+        setManualAddError(json.error || 'Failed to save transaction.');
+        return;
+      }
+      showToast('Transaction added successfully', 'success');
+      setIsManualAddOpen(false);
+      setManualAddForm(EMPTY_MANUAL_FORM);
+      fetchTransactions(activeFilter, true);
+    } catch {
+      setManualAddError('Network error. Please try again.');
+    } finally {
+      setManualAddSaving(false);
+    }
+  };
+
   const closeReview = () => {
     setIsReviewOpen(false);
     setReviewPickerField(null);
@@ -1101,20 +1219,21 @@ const Transactions = () => {
     if (!res.ok) throw new Error('Failed to save note');
   };
 
-  /** Fire the approve API for a categorised row. */
+  /** Fire the approve API for a categorised row — returns the parsed JSON response. */
   const approveReviewTxn = async (transactionId) => {
     const { data: { session } } = await supabase.auth.getSession();
     const res = await fetch(`${API_BASE_URL}/api/transactions/${transactionId}/approve`, {
       method: 'PATCH',
       headers: { 'Authorization': `Bearer ${session?.access_token || ''}` }
     });
+    const json = await res.json();
     if (!res.ok) {
-      const json = await res.json();
       throw new Error(json.error || 'Approve failed');
     }
+    return json; // contains { success, similarTransactions, suggestedAccount }
   };
 
-  /** Fire the manual-categorize API for an uncategorised row. */
+  /** Fire the manual-categorize API for an uncategorised row — returns the parsed JSON response. */
   const manualCategorizeReviewTxn = async (uncatId, offsetAccountId) => {
     const { data: { session } } = await supabase.auth.getSession();
     const res = await fetch(`${API_BASE_URL}/api/transactions/manual-categorize`, {
@@ -1122,10 +1241,11 @@ const Transactions = () => {
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session?.access_token || ''}` },
       body: JSON.stringify({ uncategorized_transaction_id: uncatId, offset_account_id: offsetAccountId })
     });
+    const json = await res.json();
     if (!res.ok) {
-      const json = await res.json();
       throw new Error(json.error || 'Categorize failed');
     }
+    return json; // contains { success, similarTransactions, suggestedAccount }
   };
 
   /**
@@ -1269,10 +1389,11 @@ const Transactions = () => {
       }
 
       // ── Step 3: Approve / categorize ──────────────────────────────────────
+      let approveResult = null;
       if (!isCategorised || cleanSlateHappened) {
         // Uncategorised row, or the transactions row was just deleted by /correct.
         // Create a fresh transactions row via manual-categorize.
-        await manualCategorizeReviewTxn(uncatId, offsetAccountId);
+        approveResult = await manualCategorizeReviewTxn(uncatId, offsetAccountId);
 
         // Re-apply preserved note on the newly created transactions row
         if (preservedNote) {
@@ -1307,13 +1428,21 @@ const Transactions = () => {
           }
         );
         if (!recatRes.ok) {
-          const json = await recatRes.json();
-          throw new Error(json.error || 'Recategorize failed');
+          const recatJson = await recatRes.json();
+          throw new Error(recatJson.error || 'Recategorize failed');
         }
+        approveResult = await recatRes.json(); // recategorize returns similarTransactions
         await approveReviewTxn(txnRow.transaction_id);
       } else {
         // Categorised PENDING, no offset change — pure approval (or note-only).
-        await approveReviewTxn(txnRow.transaction_id);
+        approveResult = await approveReviewTxn(txnRow.transaction_id);
+      }
+
+      // Show similar transactions popup if the server found any
+      if (approveResult?.similarTransactions?.length > 0) {
+        setSimilarTxns(approveResult.similarTransactions);
+        setSimilarSuggestedAccount(approveResult.suggestedAccount);
+        setSimilarAccountOverrides({});
       }
 
       // ── Step 4+5: Pre-fill next sibling (if same group) then advance queue ───
@@ -1536,6 +1665,18 @@ const Transactions = () => {
           <p>Manage and categorize your bank statements and ledger entries.</p>
         </div>
         <div className="header-actions">
+          {/* Manual Add button — always visible */}
+          <button
+            id="transactions-manual-add-btn"
+            className="action-btn"
+            onClick={() => { setManualAddForm(EMPTY_MANUAL_FORM); setManualAddError(''); setIsManualAddOpen(true); }}
+            style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <path d="M12 5v14M5 12h14"/>
+            </svg>
+            Add Transaction
+          </button>
           {/* Review button — only visible when there are non-approved transactions */}
           {transactions.some(t => {
             const row = t.transactions?.[0];
@@ -2068,7 +2209,7 @@ const Transactions = () => {
       </div>
 
       {similarTxns.length > 0 && (
-        <div className="modal-overlay" onClick={() => setSimilarTxns([])}>
+        <div className="modal-overlay" style={{ zIndex: 1200 }} onClick={() => setSimilarTxns([])}>
           <div className="similar-txns-modal" onClick={e => e.stopPropagation()}>
 
             <div className="modal-header">
@@ -2089,9 +2230,12 @@ const Transactions = () => {
 
             <div className="similar-txns-list">
               {similarTxns.map(txn => {
-                const assignedAccount = similarAccountOverrides[txn.transaction_id] || similarSuggestedAccount;
+                // Use uncategorized_transaction_id as fallback for pre-pipeline txns
+                // where transaction_id is null (avoids duplicate-key React warning)
+                const rowKey = txn.transaction_id ?? txn.uncategorized_transaction_id;
+                const assignedAccount = similarAccountOverrides[rowKey] || similarSuggestedAccount;
                 return (
-                  <div key={txn.transaction_id} className="similar-txn-row">
+                  <div key={rowKey} className="similar-txn-row">
                     <div className="similar-txn-date">
                       {new Date(txn.transaction_date).toLocaleDateString('en-IN',
                         { year: 'numeric', month: 'short', day: '2-digit' })}
@@ -2110,7 +2254,7 @@ const Transactions = () => {
                       <span className="similar-arrow">→</span>
                       <button
                         className="similar-account-btn"
-                        onClick={() => setSimilarPickerTarget(txn.transaction_id)}
+                        onClick={() => setSimilarPickerTarget(rowKey)}
                       >
                         {assignedAccount?.account_name}
                         <svg width="10" height="10" viewBox="0 0 24 24" fill="none"
@@ -2444,6 +2588,170 @@ const Transactions = () => {
               />
             );
           })()}
+        </div>
+      )}
+      {/* ── Manual Add Transaction Popup ── */}
+      {isManualAddOpen && (
+        <div className="review-overlay" style={{ zIndex: 1100 }} onClick={() => setIsManualAddOpen(false)}>
+          <div className="review-card" onClick={e => e.stopPropagation()}>
+
+            {/* Header */}
+            <div className="review-header">
+              <div>
+                <h2 className="review-title">Add Transaction</h2>
+                <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Saved directly as approved</span>
+              </div>
+              <button className="review-close-btn" onClick={() => setIsManualAddOpen(false)} title="Close">✕</button>
+            </div>
+
+            {/* Body */}
+            <div className="review-body">
+
+              {/* Date */}
+              <div className="review-field">
+                <label className="review-field-label">Date</label>
+                <input
+                  type="date"
+                  className="review-input"
+                  value={manualAddForm.txn_date}
+                  onChange={e => setManualAddForm(f => ({ ...f, txn_date: e.target.value }))}
+                />
+              </div>
+
+              {/* Details */}
+              <div className="review-field">
+                <label className="review-field-label">Details</label>
+                <input
+                  type="text"
+                  className="review-input"
+                  value={manualAddForm.details}
+                  onChange={e => setManualAddForm(f => ({ ...f, details: e.target.value }))}
+                  placeholder="Transaction description"
+                />
+              </div>
+
+              {/* Amount */}
+              <div className="review-field">
+                <label className="review-field-label">Amount</label>
+                <div className="review-amount-row">
+                  <div className="review-type-toggle">
+                    <button
+                      className={`type-btn ${manualAddForm.transaction_type === 'DEBIT' ? 'active debit' : ''}`}
+                      onClick={() => setManualAddForm(f => ({ ...f, transaction_type: 'DEBIT' }))}
+                    >− Dr</button>
+                    <button
+                      className={`type-btn ${manualAddForm.transaction_type === 'CREDIT' ? 'active credit' : ''}`}
+                      onClick={() => setManualAddForm(f => ({ ...f, transaction_type: 'CREDIT' }))}
+                    >+ Cr</button>
+                  </div>
+                  <input
+                    type="number"
+                    className="review-input"
+                    step="0.01"
+                    min="0.01"
+                    value={manualAddForm.amount}
+                    onChange={e => setManualAddForm(f => ({ ...f, amount: e.target.value }))}
+                    placeholder="0.00"
+                  />
+                </div>
+              </div>
+
+              {/* Source Account */}
+              <div className="review-field">
+                <label className="review-field-label">Source Account</label>
+                <button
+                  className={`review-account-btn ${!manualAddForm._src_account_name ? 'review-assign' : ''}`}
+                  onClick={() => setManualAddPicker('src')}
+                >
+                  {manualAddForm._src_account_name || '+ Select bank / CC account'}
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M6 9l6 6 6-6"/></svg>
+                </button>
+              </div>
+
+              {/* Dest Account */}
+              <div className="review-field">
+                <label className="review-field-label">Category / Dest Account</label>
+                <button
+                  className={`review-account-btn ${!manualAddForm._offset_account_name ? 'review-assign' : ''}`}
+                  onClick={() => setManualAddPicker('dest')}
+                >
+                  {manualAddForm._offset_account_name || '+ Assign category'}
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M6 9l6 6 6-6"/></svg>
+                </button>
+              </div>
+
+              {/* Note */}
+              <div className="review-field">
+                <label className="review-field-label">Note <span style={{ fontWeight: 400, opacity: 0.6 }}>(optional)</span></label>
+                <textarea
+                  className="review-textarea"
+                  maxLength={500}
+                  rows={2}
+                  value={manualAddForm.user_note}
+                  onChange={e => setManualAddForm(f => ({ ...f, user_note: e.target.value }))}
+                  placeholder="Optional note…"
+                />
+                <span className="review-char-count">{manualAddForm.user_note.length}/500</span>
+              </div>
+
+            </div>
+
+            {/* Validation */}
+            {manualAddError && (
+              <div className="review-validation-msg">{manualAddError}</div>
+            )}
+
+            {/* Footer — no Skip / Save & Skip */}
+            <div className="review-footer">
+              <button
+                className="action-btn"
+                onClick={() => setIsManualAddOpen(false)}
+                disabled={manualAddSaving}
+              >
+                Cancel
+              </button>
+              <button
+                className="action-btn approve-selected has-selection review-approve-btn"
+                onClick={handleManualAddSave}
+                disabled={manualAddSaving}
+              >
+                {manualAddSaving
+                  ? <><span className="spinner-small"></span> Saving…</>
+                  : <><ICONS.Check /> Save Transaction</>
+                }
+              </button>
+            </div>
+
+          </div>
+
+          {/* Account pickers — inside overlay so they stack above the card */}
+          {manualAddPicker === 'src' && (
+            <AccountPickerModal
+              onClose={() => setManualAddPicker(null)}
+              currentAccountId={manualAddForm.base_account_id}
+              preloadedAccounts={cachedAccounts}
+              allowedParentAccountNames={['Bank Accounts', 'Credit Cards']}
+              allowedAccountNames={['Cash in Hand']}
+              onAccountCreated={handleAccountCreated}
+              onSelect={account => {
+                setManualAddForm(f => ({ ...f, base_account_id: account.account_id, _src_account_name: account.account_name }));
+                setManualAddPicker(null);
+              }}
+            />
+          )}
+          {manualAddPicker === 'dest' && (
+            <AccountPickerModal
+              onClose={() => setManualAddPicker(null)}
+              currentAccountId={manualAddForm.offset_account_id}
+              transactionDirection={manualAddForm.transaction_type}
+              preloadedAccounts={cachedAccounts}
+              onAccountCreated={handleAccountCreated}
+              onSelect={account => {
+                setManualAddForm(f => ({ ...f, offset_account_id: account.account_id, _offset_account_name: account.account_name }));
+                setManualAddPicker(null);
+              }}
+            />
+          )}
         </div>
       )}
     </div>

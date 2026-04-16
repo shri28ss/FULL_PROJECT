@@ -226,6 +226,7 @@ async function recategorizeTransaction(req, res) {
           .from('transactions')
           .select(`
             transaction_id,
+            uncategorized_transaction_id,
             amount,
             transaction_type,
             transaction_date,
@@ -292,10 +293,10 @@ async function approveTransaction(req, res) {
       return res.status(400).json({ error: 'Missing transactionId.' });
     }
 
-    // Check if transaction uses uncategorised fallback account
+    // Fetch full transaction row (needed for both the uncategorised guard and similar-txn lookup)
     const { data: txnCheck } = await supabase
       .from('transactions')
-      .select('offset_account_id, accounts!transactions_offset_account_id_fkey(account_name)')
+      .select('extracted_id, transaction_type, offset_account_id, details, uncategorized_transaction_id, accounts!transactions_offset_account_id_fkey(account_name)')
       .eq('transaction_id', transactionId)
       .eq('user_id', userId)
       .single();
@@ -319,16 +320,79 @@ async function approveTransaction(req, res) {
 
     if (error) {
       if (error.code === '23505') {
-        // Unique constraint violation — already processed, safe to ignore
         console.warn(`⚠️ Duplicate skipped for txn ${transactionId}: already approved`);
-        return res.status(200).json({ success: true, note: 'already_approved' });
+        return res.status(200).json({ success: true, note: 'already_approved', similarTransactions: [], suggestedAccount: null });
       }
       console.error('Approve transaction error:', error);
       return res.status(500).json({ error: 'Failed to approve transaction.' });
     }
 
-    // Phase 1 Response — return early
-    res.status(200).json({ success: true });
+    // ── Similar transaction lookup ─────────────────────────────────────────
+    // Find other PENDING transactions with the same merchant/category so the
+    // user can batch-approve them via the "Similar Transactions Found" popup.
+    let similarTransactions = [];
+    let suggestedAccount = null;
+
+    if (txnCheck) {
+      const { transaction_type, offset_account_id, details } = txnCheck;
+
+      // Try to recover extracted_id via rules engine if not stored
+      let extracted_id = txnCheck.extracted_id;
+      if (!extracted_id && details) {
+        const rulesResult = rulesEngineService.evaluateTransaction(details);
+        if (rulesResult.hasRuleMatch && rulesResult.extractedId) {
+          extracted_id = rulesResult.extractedId;
+        }
+      }
+
+      // Fetch the offset account name for the popup header
+      const { data: suggestedAccountData } = await supabase
+        .from('accounts')
+        .select('account_id, account_name')
+        .eq('account_id', offset_account_id)
+        .single();
+      suggestedAccount = suggestedAccountData || null;
+
+      // Priority 1: same extracted_id (precise merchant match)
+      // Priority 2: same offset_account_id, HIGH/MEDIUM attention (broader fallback)
+      let similarQuery = supabase
+        .from('transactions')
+        .select(`
+          transaction_id,
+          uncategorized_transaction_id,
+          amount,
+          transaction_type,
+          transaction_date,
+          details,
+          extracted_id,
+          offset_account_id,
+          attention_level,
+          current_account:offset_account_id (
+            account_id,
+            account_name
+          )
+        `)
+        .eq('user_id', userId)
+        .eq('review_status', 'PENDING')
+        .eq('transaction_type', transaction_type)
+        .neq('transaction_id', transactionId);
+
+      if (extracted_id) {
+        similarQuery = similarQuery.eq('extracted_id', extracted_id);
+      } else {
+        similarQuery = similarQuery
+          .eq('offset_account_id', offset_account_id)
+          .eq('is_uncategorised', false)
+          .in('attention_level', ['HIGH', 'MEDIUM']);
+      }
+
+      const { data: similar } = await similarQuery.limit(20);
+      similarTransactions = similar || [];
+    }
+    // ── End similar transaction lookup ────────────────────────────────────
+
+    // Phase 1 Response — includes similar txns so frontend can show popup
+    res.status(200).json({ success: true, similarTransactions, suggestedAccount });
 
     // Phase 2: Background processing (Ledger entries + Caching)
     setImmediate(async () => {
@@ -374,6 +438,7 @@ async function approveTransaction(req, res) {
 
 /**
  * bulkApproveTransactions(req, res)
+
  * Updates multiple transactions to mark as approved and posted.
  * Expects req.body.transaction_ids = array of transaction_ids
  * Enforces user ownership.
@@ -664,6 +729,7 @@ async function manualCategorizeTransaction(req, res) {
           .from('transactions')
           .select(`
             transaction_id,
+            uncategorized_transaction_id,
             amount,
             transaction_type,
             transaction_date,
@@ -997,6 +1063,82 @@ async function updateSourceAccount(req, res) {
   }
 }
 
+/**
+ * manualAddTransaction(req, res)
+ * Creates a brand-new transaction directly from user input — no uncategorized
+ * transaction source needed. Immediately APPROVED and POSTED.
+ * Body: { base_account_id, offset_account_id, amount, transaction_type, transaction_date, details, user_note? }
+ */
+async function manualAddTransaction(req, res) {
+  try {
+    const { base_account_id, offset_account_id, amount, transaction_type, transaction_date, details, user_note } = req.body;
+    const userId = req.user?.id;
+
+    if (!userId) return res.status(401).json({ error: 'User authentication failed.' });
+
+    if (!base_account_id || !offset_account_id || !amount || !transaction_type || !transaction_date || !details) {
+      return res.status(400).json({ error: 'Missing required fields: base_account_id, offset_account_id, amount, transaction_type, transaction_date, details.' });
+    }
+    if (!['DEBIT', 'CREDIT'].includes(transaction_type)) {
+      return res.status(400).json({ error: 'transaction_type must be DEBIT or CREDIT.' });
+    }
+    if (isNaN(amount) || Number(amount) <= 0) {
+      return res.status(400).json({ error: 'amount must be a positive number.' });
+    }
+
+    const { data: newTxn, error: insertError } = await supabase
+      .from('transactions')
+      .insert([{
+        user_id: userId,
+        base_account_id,
+        offset_account_id,
+        transaction_date,
+        details,
+        amount: Number(amount),
+        transaction_type,
+        categorised_by: 'MANUAL',
+        confidence_score: 1.00,
+        posting_status: 'POSTED',
+        review_status: 'APPROVED',
+        attention_level: 'LOW',
+        is_uncategorised: false,
+        user_note: user_note || null,
+      }])
+      .select('transaction_id')
+      .single();
+
+    if (insertError) {
+      console.error('manualAddTransaction insert error:', insertError);
+      return res.status(500).json({ error: 'Failed to create transaction.' });
+    }
+
+    // Create ledger entries synchronously (no uncategorized row to clean up)
+    await createLedgerEntries(
+      newTxn.transaction_id,
+      base_account_id,
+      offset_account_id,
+      Number(amount),
+      transaction_type,
+      transaction_date,
+      false,
+      userId
+    );
+
+    // Seed vector cache with description
+    const rulesResult = rulesEngineService.evaluateTransaction(details);
+    if (rulesResult.hasRuleMatch && rulesResult.extractedId) {
+      await upsertExactCache(userId, rulesResult.extractedId, offset_account_id);
+    } else {
+      await upsertVectorCache(userId, details, offset_account_id);
+    }
+
+    return res.status(200).json({ success: true, transaction_id: newTxn.transaction_id });
+  } catch (err) {
+    console.error('Unexpected error in manualAddTransaction:', err);
+    return res.status(500).json({ error: 'Internal server error.' });
+  }
+}
+
 module.exports = {
   recategorizeTransaction,
   approveTransaction,
@@ -1004,5 +1146,6 @@ module.exports = {
   manualCategorizeTransaction,
   correctTransaction,
   updateSourceAccount,
-  updateTransactionNote
+  updateTransactionNote,
+  manualAddTransaction,
 };
