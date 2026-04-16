@@ -83,7 +83,7 @@ def call_llm(
                     contents=content,
                     config=types.GenerateContentConfig(temperature=temperature),
                 )
-                logger.debug("Gemini direct OK (attempt %d)", attempt + 1)
+                logger.info("Gemini direct OK (model=%s, attempt %d)", model, attempt + 1)
                 return response.text.strip()
 
             except Exception as e:

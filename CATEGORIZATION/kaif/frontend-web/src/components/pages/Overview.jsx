@@ -45,6 +45,11 @@ const Overview = () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
+      
+      // Calculate date 12 months ago to limit query volume
+      const twelveMonthsAgo = new Date();
+      twelveMonthsAgo.setMonth(twelveMonthsAgo.getMonth() - 12);
+      const dateStr = twelveMonthsAgo.toISOString().split('T')[0];
 
       // ── 1. Fetch uncategorized_transactions for P&L widgets (income / expense / chart) ──
       const { data, error } = await supabase
@@ -66,6 +71,7 @@ const Overview = () => {
           )
         `)
         .eq('user_id', user.id)
+        .gte('txn_date', dateStr)
         .order('txn_date', { ascending: false });
 
       if (error) throw error;

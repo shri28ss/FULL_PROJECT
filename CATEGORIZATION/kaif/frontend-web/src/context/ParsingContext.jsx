@@ -149,19 +149,67 @@ export const ParsingProvider = ({ children }) => {
         setMaxStepReached(-1);
     };
 
+    const [recentDocs, setRecentDocs] = useState([]);
+    const [stats, setStats] = useState({ total: 0, parsed: 0, failed: 0, pending_review: 0 });
+    const [isDashboardLoading, setIsDashboardLoading] = useState(false);
+    
+    // Global fetch for dashboard data - allows pages to share this without re-fetching
+    const refreshDashboardData = React.useCallback(async (force = false) => {
+        // If we already have data and not forcing, just return
+        if (!force && recentDocs.length > 0) return;
+        
+        setIsDashboardLoading(true);
+        try {
+            const [statsRes, recentRes] = await Promise.all([
+                API.get("/documents/stats"),
+                API.get("/documents/recent")
+            ]);
+            setStats(statsRes.data);
+            setRecentDocs(recentRes.data);
+        } catch (err) {
+            console.error("Failed to fetch global dashboard data", err);
+        } finally {
+            setIsDashboardLoading(false);
+        }
+    }, [recentDocs.length]);
+
+    // Initial mount fetch
+    useEffect(() => {
+        refreshDashboardData();
+    }, [refreshDashboardData]);
+
+    const contextValue = React.useMemo(() => ({
+        activeDoc,
+        isExtracting,
+        latestFinishedDocId,
+        startExtraction,
+        retryExtraction,
+        clearActiveDoc,
+        setLatestFinishedDocId,
+        notification,
+        setNotification,
+        maxStepReached,
+        // New Global States
+        recentDocs,
+        setRecentDocs,
+        stats,
+        setStats,
+        isDashboardLoading,
+        refreshDashboardData
+    }), [
+        activeDoc, 
+        isExtracting, 
+        latestFinishedDocId, 
+        notification, 
+        maxStepReached,
+        recentDocs,
+        stats,
+        isDashboardLoading,
+        refreshDashboardData
+    ]);
+
     return (
-        <ParsingContext.Provider value={{
-            activeDoc,
-            isExtracting,
-            latestFinishedDocId,
-            startExtraction,
-            retryExtraction,
-            clearActiveDoc,
-            setLatestFinishedDocId,
-            notification,
-            setNotification,
-            maxStepReached
-        }}>
+        <ParsingContext.Provider value={contextValue}>
             {children}
             <NotificationPortal notification={notification} onClose={() => setNotification(null)} />
         </ParsingContext.Provider>
