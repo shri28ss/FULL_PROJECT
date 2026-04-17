@@ -16,12 +16,9 @@ import re
 import json
 import logging
 
-from google import genai
-from google.genai import types
-from config import GEMINI_API_KEY, LLM_PARSER_MODEL
-from services.llm_retry import call_with_retry
+from services.llm_provider import call_llm
+from config import LLM_PARSER_MODEL
 
-client = genai.Client(api_key=GEMINI_API_KEY)
 logger = logging.getLogger("ledgerai.llm_parser")
 
 # Pages per Gemini call. 10 pages ≈ 3000–5000 input tokens — well within limits.
@@ -154,15 +151,15 @@ Return ONLY the JSON array. No markdown. No explanation.
     logger.info("Vision extraction starting for %s (note=%s)", institution, "YES" if note else "NO")
     
     try:
-        response = call_with_retry(
-            client, LLM_PARSER_MODEL, 
-            [
+        from google.genai import types
+        return call_llm(
+            parts=[
                 types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf"),
                 prompt
             ],
-            config={"temperature": 0}
+            model=LLM_PARSER_MODEL,
+            temperature=0
         )
-        return response.text.strip()
     except Exception as e:
         logger.error("Vision extraction failed: %s", e)
         raise
@@ -242,11 +239,11 @@ DOCUMENT TEXT
 Return ONLY the JSON array. No markdown. No explanation.
 """
 
-    response = call_with_retry(
-        client, LLM_PARSER_MODEL, prompt,
-        config={"temperature": 0},
+    return call_llm(
+        prompt=prompt,
+        model=LLM_PARSER_MODEL,
+        temperature=0
     )
-    return response.text.strip()
 
 
 def _safe_parse_json(response: str, page_from: int, page_to: int) -> list:

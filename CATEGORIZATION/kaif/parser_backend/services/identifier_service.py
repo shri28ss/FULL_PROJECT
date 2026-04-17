@@ -3,15 +3,13 @@ import json
 import logging
 from typing import Dict, List, Optional
 
-from google import genai
-from config import GEMINI_API_KEY, CLASSIFIER_MODEL
-from services.llm_retry import call_with_retry
+from config import CLASSIFIER_MODEL
+from services.llm_provider import call_llm
 from repository.statement_category_repo import (
     get_all_matchable_formats,
     insert_statement_category,
 )
 
-client = genai.Client(api_key=GEMINI_API_KEY)
 logger = logging.getLogger("ledgerai.identifier_service")
 
 
@@ -462,12 +460,11 @@ Analyze this financial statement and generate identification markers:
 {first_pages_text}
 """
 
-    response = call_with_retry(
-        client, CLASSIFIER_MODEL, prompt,
-        config={"temperature": 0},
+    raw = call_llm(
+        prompt=prompt,
+        model=CLASSIFIER_MODEL,
+        temperature=0
     )
-
-    raw = response.text.strip()
 
     # ── Clean and parse the LLM JSON response ────────────────────────────────
     def _clean_json(s: str) -> str:
