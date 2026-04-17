@@ -3,6 +3,7 @@ import { supabase } from '../shared/supabase';
 import { useAuth } from '../shared/hooks/useAuth';
 
 const RoleContext = createContext(null);
+
 export function RoleProvider({ children }) {
   const { user } = useAuth();
   const [role, setRole] = useState(null);

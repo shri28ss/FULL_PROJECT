@@ -39,18 +39,27 @@ _LEGAL_SUFFIX_RE = re.compile(
 
 def normalise_institution_name(raw: str) -> str:
     """
-    Strip trailing legal registration suffixes and return UPPERCASE.
-    Iterates until stable so "Bank, Ltd." → "BANK" in two passes.
-    Returns "UNKNOWN" for blank input.
+    Strip trailing legal registration suffixes and handle common prefixes.
+    Returns UPPERCASE.
+    Example: "The Federal Bank Ltd." -> "FEDERAL BANK"
     """
     if not raw or not raw.strip():
         return "UNKNOWN"
-    name = raw.strip()
+    
+    name = raw.strip().upper()
+    
+    # Strip common leading articles like "THE "
+    if name.startswith("THE "):
+        name = name[4:].strip()
+        
+    # Strip trailing legal registration suffixes (Limited, Ltd, etc.)
     prev = None
     while prev != name:
         prev = name
+        # We use the regex on the upper-cased name
         name = _LEGAL_SUFFIX_RE.sub("", name).strip().rstrip(",").strip()
-    return name.upper()
+        
+    return name
 
 
 # ════════════════════════════════════════════════════════════
