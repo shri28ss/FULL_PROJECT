@@ -71,7 +71,8 @@ export default function ParsingPage() {
     const navigate = useNavigate();
     const { activeDoc, isExtracting, startExtraction, retryExtraction, clearActiveDoc, maxStepReached } = useParsing();
 
-    const [file, setFile] = useState(null);
+    // const [file, setFile] = useState(null);
+    const [file,setFile] = useState(null);
     const [password, setPassword] = useState("");
     const [needsPassword, setNeedsPassword] = useState(false);
     const [pdfType, setPdfType] = useState(null);

@@ -66,8 +66,8 @@ const AmountEditor = ({ tx, onSave, onCancel }) => {
     const [editAmount, setEditAmount] = useState(isDebit ? tx.debit : tx.credit);
     const [editType, setEditType] = useState(isDebit ? 'DEBIT' : 'CREDIT');
     const [saving, setSaving] = useState(false);
+    // const inputRef = useRef(null);
     const inputRef = useRef(null);
-
     useEffect(() => { inputRef.current?.focus(); inputRef.current?.select(); }, []);
 
     const handleSave = async () => {

@@ -2,8 +2,8 @@ import { createContext, useContext, useState, useEffect } from 'react';
 import { supabase } from '../shared/supabase';
 import { useAuth } from '../shared/hooks/useAuth';
 
+// const RoleContext = createContext(null);
 const RoleContext = createContext(null);
-
 export function RoleProvider({ children }) {
   const { user } = useAuth();
   const [role, setRole] = useState(null);

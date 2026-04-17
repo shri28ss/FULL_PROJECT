@@ -224,8 +224,8 @@ const Overview = () => {
       }
 
       // Skip contra transactions (internal bank-to-bank transfers)
+      // if (isContra) return;
       if (isContra) return;
-
       // Skip uncategorised transactions:
       // 1. the database explicitly marked it as uncategorised (is_uncategorised === true)
       // 2. no linked account at all (offsetAccountType is null)

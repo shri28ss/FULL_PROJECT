@@ -17,8 +17,8 @@ import QCPanel from './components/QCPanel';
 
 // Parser Module Components
 import ParsingPage from './pages/Parsing';
+// import ReviewPage from './pages/Review';
 import ReviewPage from './pages/Review';
-
 // Layouts & Protection
 import AuthLayout from './layouts/AuthLayout';
 import AppLayout from './layouts/AppLayout';
