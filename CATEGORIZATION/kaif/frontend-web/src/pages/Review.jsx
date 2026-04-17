@@ -119,7 +119,7 @@ export default function ReviewPage() {
     const [searchParams] = useSearchParams();
     const documentId = searchParams.get("id");
     const navigate = useNavigate();
-    const { retryExtraction, refreshDashboardData } = useParsing();
+    const { retryExtraction } = useParsing();
 
     const [data, setData] = useState(null);
     const [isLoading, setIsLoading] = useState(true);
@@ -156,44 +156,40 @@ export default function ReviewPage() {
         card_network: 'VISA'
     });
 
-    const fetchReviewData = async () => {
-        if (!documentId) return;
-        setIsLoading(true);
-        try {
-            const res = await API.get(`/documents/${documentId}/review`);
-            setData(res.data);
-            const codeTxns = res.data.code_transactions || [];
-            const llmTxns = res.data.llm_transactions || [];
-            
-            setEditableCodeTxns(codeTxns);
-            setEditableLlmTxns(llmTxns);
-            
-            const preferred = res.data.transaction_parsed_type || "CODE";
-            setActiveParser(preferred);
-            
-            // Auto-deselect rows marked as duplicates by the backend
-            setSelectedIndices({
-                CODE: codeTxns.map((tx, i) => tx.is_duplicate ? null : i).filter(v => v !== null),
-                LLM: llmTxns.map((tx, i) => tx.is_duplicate ? null : i).filter(v => v !== null)
-            });
-            if (res.data.user_accounts) setUserAccounts(res.data.user_accounts);
-            if (res.data.selected_account_id) {
-                setSelectedAccountId(res.data.selected_account_id);
-                setAccountLinked(true);
-            }
-            if (res.data.status === "APPROVE") {
-                setIsApproved(true);
-                setAccountLinked(true);
-            }
-        } catch (err) {
-            console.error(err);
-            setError("Failed to fetch review data.");
-        } finally {
-            setIsLoading(false);
-        }
-    };
-
     useEffect(() => {
+        if (!documentId) {
+            setIsLoading(false);
+            return;
+        }
+
+        const fetchReviewData = async () => {
+            try {
+                const res = await API.get(`/documents/${documentId}/review`);
+                setData(res.data);
+                setEditableCodeTxns(res.data.code_transactions || []);
+                setEditableLlmTxns(res.data.llm_transactions || []);
+                const preferred = res.data.transaction_parsed_type || "CODE";
+                setActiveParser(preferred);
+                setSelectedIndices({
+                    CODE: (res.data.code_transactions || []).map((_, i) => i),
+                    LLM: (res.data.llm_transactions || []).map((_, i) => i)
+                });
+                if (res.data.user_accounts) setUserAccounts(res.data.user_accounts);
+                if (res.data.selected_account_id) {
+                    setSelectedAccountId(res.data.selected_account_id);
+                    setAccountLinked(true);
+                }
+                if (res.data.status === "APPROVE") {
+                    setIsApproved(true);
+                    setAccountLinked(true);
+                }
+            } catch (err) {
+                console.error(err);
+                setError("Failed to fetch review data.");
+            } finally {
+                setIsLoading(false);
+            }
+        };
         fetchReviewData();
     }, [documentId]);
 
@@ -207,7 +203,6 @@ export default function ReviewPage() {
         try {
             await API.post(`/documents/${documentId}/approve`, { transactions: selectedTxns, parser_type: activeParser });
             setIsApproved(true);
-            refreshDashboardData(true); // Sync global cache
         } catch (err) {
             console.error(err);
             alert("Approval failed: " + (err.response?.data?.detail || err.message));
@@ -236,9 +231,6 @@ export default function ReviewPage() {
         try {
             await API.post(`/documents/${documentId}/select-account`, { account_id: selectedAccountId });
             setAccountLinked(true);
-            refreshDashboardData(true); // Sync global cache
-            // Re-fetch data to trigger backend deduplication now that account is linked
-            await fetchReviewData();
         } catch (err) {
             console.error(err);
             alert("Failed to link account: " + (err.response?.data?.detail || err.message));
@@ -274,7 +266,6 @@ export default function ReviewPage() {
             // Auto-link newly created account
             await API.post(`/documents/${documentId}/select-account`, { account_id: createdAcc.account_id });
             setAccountLinked(true);
-            refreshDashboardData(true); // Sync global cache
             
         } catch (err) {
             console.error(err);
@@ -352,9 +343,8 @@ export default function ReviewPage() {
     const toggleSelectAll = (parserType) => {
         const txns = parserType === "CODE" ? editableCodeTxns : editableLlmTxns;
         setSelectedIndices(prev => {
-            const nonDuplicates = txns.map((t, i) => t.is_duplicate ? null : i).filter(v => v !== null);
-            const isAllSelected = nonDuplicates.length > 0 && nonDuplicates.every(idx => prev[parserType].includes(idx));
-            return { ...prev, [parserType]: isAllSelected ? [] : nonDuplicates };
+            const isAllSelected = prev[parserType].length === txns.length;
+            return { ...prev, [parserType]: isAllSelected ? [] : txns.map((_, i) => i) };
         });
     };
 
@@ -477,21 +467,9 @@ export default function ReviewPage() {
                                 const amount = isDebit ? tx.debit : tx.credit;
 
                                 return (
-                                    <tr 
-                                        key={i} 
-                                        style={{ 
-                                            borderTop: '1px solid var(--border-color)', 
-                                            background: tx.is_duplicate ? 'rgba(43, 67, 102, 0.05)' : (isSelected ? 'rgba(72, 62, 168, 0.02)' : 'transparent'),
-                                            position: 'relative'
-                                        }}
-                                    >
+                                    <tr key={i} style={{ borderTop: '1px solid var(--border-color)', background: isSelected ? 'rgba(72, 62, 168, 0.02)' : 'transparent' }}>
                                         <td style={{ textAlign: 'center', padding: '0.5rem' }}>
-                                            <input 
-                                                type="checkbox" 
-                                                checked={isSelected} 
-                                                onChange={() => !isApproved && !tx.is_duplicate && toggleSelection(parserType, i)} 
-                                                disabled={isApproved || tx.is_duplicate} 
-                                            />
+                                            <input type="checkbox" checked={isSelected} onChange={() => !isApproved && toggleSelection(parserType, i)} disabled={isApproved} />
                                         </td>
                                         
                                         {/* Date Field */}
@@ -506,26 +484,11 @@ export default function ReviewPage() {
                                             ) : (
                                                 <div 
                                                     className="amount-cell-review"
-                                                    onClick={() => !isApproved && !tx.is_duplicate && setEditingCell({ parser: parserType, index: i, field: 'date' })}
-                                                    style={{ cursor: (isApproved || tx.is_duplicate) ? 'default' : 'pointer', width: '120px', display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '4px' }}
+                                                    onClick={() => !isApproved && setEditingCell({ parser: parserType, index: i, field: 'date' })}
+                                                    style={{ cursor: isApproved ? 'default' : 'pointer', width: '120px' }}
                                                 >
-                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                                        {tx.date || tx.txn_date || ''}
-                                                        {!isApproved && !tx.is_duplicate && <span className="amount-edit-hint">✎</span>}
-                                                    </div>
-                                                    {tx.is_duplicate && (
-                                                        <span style={{ 
-                                                            fontSize: '10px', 
-                                                            fontWeight: 800, 
-                                                            background: '#2B4366', 
-                                                            color: 'white', 
-                                                            padding: '2px 6px', 
-                                                            borderRadius: '4px',
-                                                            letterSpacing: '0.5px'
-                                                        }}>
-                                                            DUPLICATE
-                                                        </span>
-                                                    )}
+                                                    {tx.date || tx.txn_date || ''}
+                                                    {!isApproved && <span className="amount-edit-hint">✎</span>}
                                                 </div>
                                             )}
                                         </td>
@@ -542,8 +505,8 @@ export default function ReviewPage() {
                                             ) : (
                                                 <div 
                                                     className="amount-cell-review"
-                                                    onClick={() => !isApproved && !tx.is_duplicate && setEditingCell({ parser: parserType, index: i, field: 'details' })}
-                                                    style={{ cursor: (isApproved || tx.is_duplicate) ? 'default' : 'pointer', minWidth: '200px' }}
+                                                    onClick={() => !isApproved && setEditingCell({ parser: parserType, index: i, field: 'details' })}
+                                                    style={{ cursor: isApproved ? 'default' : 'pointer', minWidth: '200px' }}
                                                 >
                                                     {tx.details || tx.description || ''}
                                                     {!isApproved && <span className="amount-edit-hint">✎</span>}
@@ -565,9 +528,9 @@ export default function ReviewPage() {
                                                 {/* Debit Cell */}
                                                 <td 
                                                     style={{ padding: '0.5rem 1rem', textAlign: 'right', width: '120px', position: 'relative' }}
-                                                    onClick={() => !isApproved && !tx.is_duplicate && setEditingCell({ parser: parserType, index: i, field: 'amount' })}
+                                                    onClick={() => !isApproved && setEditingCell({ parser: parserType, index: i, field: 'amount' })}
                                                 >
-                                                    <div className="amount-cell-review" style={{ cursor: (isApproved || tx.is_duplicate) ? 'default' : 'pointer', justifyContent: 'flex-end', width: '100%' }}>
+                                                    <div className="amount-cell-review" style={{ cursor: isApproved ? 'default' : 'pointer', justifyContent: 'flex-end', width: '100%' }}>
                                                         <span style={{ color: isDebit ? '#F87171' : '#e2e8f0', fontWeight: 600 }}>{isDebit ? `- ₹${amount}` : '--'}</span>
                                                         {!isApproved && <span className="amount-edit-hint">✎</span>}
                                                     </div>
@@ -575,9 +538,9 @@ export default function ReviewPage() {
                                                 {/* Credit Cell */}
                                                 <td 
                                                     style={{ padding: '0.5rem 1rem', textAlign: 'right', width: '120px', position: 'relative' }}
-                                                    onClick={() => !isApproved && !tx.is_duplicate && setEditingCell({ parser: parserType, index: i, field: 'amount' })}
+                                                    onClick={() => !isApproved && setEditingCell({ parser: parserType, index: i, field: 'amount' })}
                                                 >
-                                                    <div className="amount-cell-review" style={{ cursor: (isApproved || tx.is_duplicate) ? 'default' : 'pointer', justifyContent: 'flex-end', width: '100%' }}>
+                                                    <div className="amount-cell-review" style={{ cursor: isApproved ? 'default' : 'pointer', justifyContent: 'flex-end', width: '100%' }}>
                                                         <span style={{ color: !isDebit && amount > 0 ? '#34D399' : '#e2e8f0', fontWeight: 600 }}>{!isDebit && amount > 0 ? `+ ₹${amount}` : '--'}</span>
                                                         {!isApproved && <span className="amount-edit-hint">✎</span>}
                                                     </div>
@@ -597,8 +560,8 @@ export default function ReviewPage() {
                                             ) : (
                                                 <div 
                                                     className="amount-cell-review"
-                                                    onClick={() => !isApproved && !tx.is_duplicate && setEditingCell({ parser: parserType, index: i, field: 'balance' })}
-                                                    style={{ cursor: (isApproved || tx.is_duplicate) ? 'default' : 'pointer', fontWeight: 600, width: '90px', marginLeft: 'auto' }}
+                                                    onClick={() => !isApproved && setEditingCell({ parser: parserType, index: i, field: 'balance' })}
+                                                    style={{ cursor: isApproved ? 'default' : 'pointer', fontWeight: 600, width: '90px', marginLeft: 'auto' }}
                                                 >
                                                     ₹{tx.balance || '0'}
                                                     {!isApproved && <span className="amount-edit-hint">✎</span>}
@@ -778,29 +741,6 @@ export default function ReviewPage() {
                     )}
                 </div>
             </div>
-
-            {/* Deduplication Info Callout */}
-            {!isApproved && data?.duplicates_count > 0 && (
-                <div style={{
-                    background: 'rgba(72, 62, 168, 0.05)',
-                    border: '1px solid rgba(72, 62, 168, 0.2)',
-                    borderRadius: '12px',
-                    padding: '0.75rem 1.25rem',
-                    marginBottom: '1rem',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: '0.75rem',
-                    color: 'var(--primary-action)',
-                    fontSize: '0.875rem',
-                    fontWeight: 600
-                }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                        <Link size={20} />
-                        <span>Deduplication: We found <b>{data.duplicates_count} transactions</b> that were already imported in previous uploads. They've been auto-deselected for your review.</span>
-                    </div>
-                </div>
-            )}
 
             {/* Retry Info Callout */}
             {!isApproved && (

@@ -440,94 +440,6 @@ async def get_document_review(document_id: int, user=Depends(get_current_user)):
     user_id_for_accounts = user["user_id"]
     user_accounts = get_user_accounts(user_id_for_accounts)
 
-    # ── Duplicate Detection ───────────────────────────────────────────────
-    account_id = doc.get("account_id")
-    duplicates_found = 0
-    
-    if account_id:
-        # Fetch existing transactions from both tables
-        # 1. Uncategorized (Pending)
-        uncat_exists = (
-            sb.table("uncategorized_transactions")
-            .select("document_id, txn_date, details, debit, credit")
-            .eq("account_id", account_id)
-            .eq("user_id", user_id)
-            .execute()
-        )
-        
-        # 2. Categorized (Ledger)
-        ledger_exists = (
-            sb.table("transactions")
-            .select("document_id, transaction_date, details, amount")
-            .eq("base_account_id", account_id)
-            .eq("user_id", user_id)
-            .execute()
-        )
-        
-        import re as _re
-        def get_normalized_alphanumeric(text):
-            return _re.sub(r'[^A-Z0-9]', '', (text or "").upper())
-
-        def has_shared_core(s1, s2, min_len=12):
-            if not s1 or not s2: return False
-            if s1 in s2 or s2 in s1: return True
-            if len(s1) < min_len or len(s2) < min_len: return s1 == s2
-            for i in range(len(s1) - min_len + 1):
-                if s1[i:i+min_len] in s2: return True
-            return False
-
-        # Build lookup list of (date, amount, fuzzy_details)
-        existing_fingerprints = []
-
-        for r in (uncat_exists.data or []):
-            # Exclude self (if user linked-then-reloaded, don't flag its own items)
-            if r.get("document_id") == document_id: continue
-            
-            amt = float(r.get("debit") or 0) or float(r.get("credit") or 0)
-            existing_fingerprints.append({
-                "date": str(r["txn_date"]),
-                "amount": f"{amt:.2f}",
-                "fuzzy": get_normalized_alphanumeric(r["details"])
-            })
-            
-        for r in (ledger_exists.data or []):
-            if r.get("document_id") == document_id: continue
-            
-            amt = float(r.get("amount") or 0)
-            existing_fingerprints.append({
-                "date": str(r["transaction_date"]),
-                "amount": f"{amt:.2f}",
-                "fuzzy": get_normalized_alphanumeric(r["details"])
-            })
-
-        # Cross-reference with extracted transactions
-        def mark_duplicates(txn_list):
-            nonlocal duplicates_found
-            for t in txn_list:
-                t_amt = f"{float(t.get('debit') or 0) or float(t.get('credit') or 0):.2f}"
-                t_date = str(t["date"])
-                t_fuzzy = get_normalized_alphanumeric(t["details"])
-                
-                is_duplicate = False
-                for ex in existing_fingerprints:
-                    if ex["date"] == t_date and ex["amount"] == t_amt:
-                        if has_shared_core(t_fuzzy, ex["fuzzy"]):
-                            is_duplicate = True
-                            break
-                
-                if is_duplicate:
-                    t["is_duplicate"] = True
-                    duplicates_found += 1
-                else:
-                    t["is_duplicate"] = False
-        
-        mark_duplicates(code_txns)
-        mark_duplicates(llm_txns)
-        
-        if duplicates_found > 0:
-            logger.info("Deduplication: Detected %d potential duplicates for doc %s (account %s)", 
-                        duplicates_found, document_id, account_id)
-
     return {
         "bank_name":              bank_name,
         "identifier_json":        ident_json,
@@ -537,7 +449,6 @@ async def get_document_review(document_id: int, user=Depends(get_current_user)):
         "transaction_parsed_type": doc.get("transaction_parsed_type"),
         "selected_account_id":    doc.get("account_id"),   # already linked account if any
         "user_accounts":          user_accounts,           # list for dropdown
-        "duplicates_count":       duplicates_found
     }
 
 

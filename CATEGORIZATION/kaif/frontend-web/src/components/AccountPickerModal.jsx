@@ -12,7 +12,6 @@ const AccountPickerModal = ({
   transactionDirection = null,
   preloadedAccounts = null,
   allowedParentAccountNames = null,
-  allowedAccountNames = null,
   onAccountCreated
 }) => {
   const [accounts, setAccounts] = useState([]);
@@ -103,20 +102,8 @@ const AccountPickerModal = ({
       const allowedParentIds = accounts
         .filter(a => allowedParentAccountNames.includes(a.account_name))
         .map(a => a.account_id);
-
-      // Children of allowed parent groups
-      filteredList = accounts.filter(a =>
-        a.parent_account_id && allowedParentIds.includes(a.parent_account_id)
-      );
-
-      // Also include any directly-named accounts (e.g. 'Cash in Hand')
-      if (allowedAccountNames && allowedAccountNames.length > 0) {
-        const direct = accounts.filter(a => allowedAccountNames.includes(a.account_name));
-        const directIds = new Set(filteredList.map(a => a.account_id));
-        direct.forEach(a => { if (!directIds.has(a.account_id)) filteredList.push(a); });
-      }
-    } else if (allowedAccountNames && allowedAccountNames.length > 0) {
-      filteredList = accounts.filter(a => allowedAccountNames.includes(a.account_name));
+      
+      filteredList = accounts.filter(a => a.parent_account_id && allowedParentIds.includes(a.parent_account_id));
     }
 
     filteredList.forEach((account) => {

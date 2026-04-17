@@ -17,9 +17,7 @@ Pipeline steps
 5. Auto-categorise from personal history via match_personal_vectors RPC
 6. Mark grouping_status = 'done' on all rows + the document row
 """
-from __future__ import annotations
 
-import os
 import re
 import uuid
 import math
@@ -37,27 +35,12 @@ HISTORY_ROW_LIMIT  = 800
 HISTORY_DAYS       = 90
 P_VEC_THRESHOLD    = 0.35
 
-# ── ML Service URL ────────────────────────────────────────────────────────────
-# Resolved lazily at call-time (not import-time) so Render env vars that are
-# injected after module import are picked up correctly.
-# Priority: ML_SERVICE_URL env var > http://127.0.0.1:<PYTHON_PORT>
-#
-# ⚠️  DEPLOYMENT CHECKLIST
-#   Render (parser_backend) MUST have ML_SERVICE_URL set to the HuggingFace
-#   Space URL, e.g.  https://<org>-<space>.hf.space
-#   It CANNOT share the Node.js backend's ML_SERVICE_URL automatically.
-def _get_ml_service_url() -> str:
-    url = os.environ.get("ML_SERVICE_URL", "").strip()
-    if not url:
-        fallback = f"http://127.0.0.1:{os.environ.get('PYTHON_PORT', '5000')}"
-        logger.critical(
-            "ML_SERVICE_URL is not set! Falling back to %s — "
-            "embeddings WILL FAIL on any deployed environment where the ML service "
-            "is not running on localhost. Set ML_SERVICE_URL on Render.",
-            fallback,
-        )
-        return fallback
-    return url
+# Must match the ML service URL used in the rest of the codebase
+import os
+ML_SERVICE_URL = os.environ.get(
+    "ML_SERVICE_URL",
+    f"http://127.0.0.1:{os.environ.get('PYTHON_PORT', '5000')}"
+)
 
 # ── VPA suffix regex (mirrors Node.js STAGE 2) ────────────────────────────────
 _VPA_RE   = re.compile(
@@ -116,42 +99,19 @@ def _embed_batch(clean_strings: list[str]) -> list[list[float] | None]:
     Returns a list of float-list embeddings (or None on failure) in the
     same order as clean_strings.
     """
-    ml_url = _get_ml_service_url()
-    embed_endpoint = f"{ml_url}/embed"
-    logger.info("[EMBED] Calling ML service: %s (%d strings)", embed_endpoint, len(clean_strings))
-
     results: list[list[float] | None] = []
     for text in clean_strings:
         try:
             resp = httpx.post(
-                embed_endpoint,
+                f"{ML_SERVICE_URL}/embed",
                 json={"text": text.upper()},
-                timeout=30.0,          # increased: HuggingFace spaces can be slow
-                follow_redirects=True, # HuggingFace Spaces redirect; httpx doesn't follow by default
-                verify=True,           # keep True; set False only if HF cert issues arise
+                timeout=15.0,
             )
             resp.raise_for_status()
             embedding = resp.json().get("embedding")
-            if isinstance(embedding, list):
-                results.append(embedding)
-            else:
-                logger.error(
-                    "[EMBED] Unexpected response shape for '%s': %s",
-                    text[:60], resp.text[:200]
-                )
-                results.append(None)
-        except httpx.ConnectError as exc:
-            logger.critical(
-                "[EMBED] Connection REFUSED to %s — is ML_SERVICE_URL correct? "
-                "Current value: %s  Error: %s",
-                embed_endpoint, ml_url, exc,
-            )
-            results.append(None)
-        except httpx.TimeoutException as exc:
-            logger.error("[EMBED] Timeout calling %s for '%s': %s", embed_endpoint, text[:60], exc)
-            results.append(None)
+            results.append(embedding if isinstance(embedding, list) else None)
         except Exception as exc:
-            logger.error("[EMBED] Unexpected error for '%s': %s", text[:60], exc)
+            logger.warning("embed failed for '%s': %s", text[:60], exc)
             results.append(None)
     return results
 
@@ -381,18 +341,6 @@ def run_merchant_grouping(document_id: int, user_id: str) -> None:
 
     embedded_txns = [t for t in embed_txns if t.get("embedding") is not None]
     logger.info("  %d / %d transactions embedded successfully", len(embedded_txns), len(embed_txns))
-
-    if not embedded_txns:
-        # All embedding calls failed — most likely ML_SERVICE_URL is misconfigured.
-        # Mark done anyway so the pipeline doesn't hang, but log loudly.
-        logger.critical(
-            "[STEP 2] ZERO embeddings succeeded for document_id=%s. "
-            "Check that ML_SERVICE_URL is correctly set on this service (Render). "
-            "Current ML_SERVICE_URL resolves to: %s",
-            document_id, _get_ml_service_url(),
-        )
-        _mark_complete(sb, document_id, txns)
-        return
 
     # ──────────────────────────────────────────────────────────────────────────
     # STEP 3 — WITHIN-BATCH GROUPING

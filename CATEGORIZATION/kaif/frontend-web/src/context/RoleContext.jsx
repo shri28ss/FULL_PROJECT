@@ -6,14 +6,13 @@ const RoleContext = createContext(null);
 
 export function RoleProvider({ children }) {
   const { user } = useAuth();
-  const [role, setRole] = useState(() => localStorage.getItem('user-role'));
-  const [roleLoading, setRoleLoading] = useState(!localStorage.getItem('user-role'));
+  const [role, setRole] = useState(null);
+  const [roleLoading, setRoleLoading] = useState(true);
 
   useEffect(() => {
     if (!user) {
       setRole(null);
       setRoleLoading(false);
-      localStorage.removeItem('user-role');
       return;
     }
 
@@ -26,13 +25,10 @@ export function RoleProvider({ children }) {
           .single();
 
         if (error) throw error;
-        const currentRole = data?.role || 'USER';
-        setRole(currentRole);
-        localStorage.setItem('user-role', currentRole);
+        setRole(data?.role || 'USER');
       } catch (err) {
         console.error('Error fetching role in RoleContext:', err);
-        // Fallback to local storage if available, else default to USER
-        setRole(localStorage.getItem('user-role') || 'USER');
+        setRole('USER');
       } finally {
         setRoleLoading(false);
       }

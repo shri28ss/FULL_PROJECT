@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../shared/supabase';
 import AddAccountModal from '../AddAccountModal';
 import '../../styles/Accounts.css';
@@ -180,11 +179,10 @@ const EditIdentifierModal = ({ account, onClose, onSuccess }) => {
   );
 };
 
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Account Node
 // ─────────────────────────────────────────────────────────────────────────────
-const AccountNode = ({ node, onRename, onDeactivate, onEditIdentifier, renamingId, setRenamingId, renameValue, setRenameValue, savingId, onViewTransactions }) => {
+const AccountNode = ({ node, onRename, onDeactivate, onEditIdentifier, renamingId, setRenamingId, renameValue, setRenameValue, savingId }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [hovered, setHovered] = useState(false);
   const hasChildren = node.children && node.children.length > 0;
@@ -220,20 +218,6 @@ const AccountNode = ({ node, onRename, onDeactivate, onEditIdentifier, renamingI
 
         {hovered && !isRenaming && !node.is_system_generated && (
           <div className="node-actions">
-            {/* View transactions for this account */}
-            <button
-              className="node-action-btn"
-              style={{ color: 'var(--primary-action, #7c6ff7)', opacity: 0.85 }}
-              onClick={e => { e.stopPropagation(); onViewTransactions(node.account_id); }}
-              title="View transactions"
-            >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                <polyline points="14 2 14 8 20 8"/>
-                <line x1="16" y1="13" x2="8" y2="13"/>
-                <line x1="16" y1="17" x2="8" y2="17"/>
-              </svg>
-            </button>
             {node.identifier && (
               <button className="node-action-btn identifier"
                 onClick={e => { e.stopPropagation(); onEditIdentifier(node); }}
@@ -263,23 +247,7 @@ const AccountNode = ({ node, onRename, onDeactivate, onEditIdentifier, renamingI
         )}
 
         {hovered && !isRenaming && node.is_system_generated && (
-          <div className="node-actions">
-            {/* View transactions even for system accounts */}
-            <button
-              className="node-action-btn"
-              style={{ color: 'var(--primary-action, #7c6ff7)', opacity: 0.85 }}
-              onClick={e => { e.stopPropagation(); onViewTransactions(node.account_id); }}
-              title="View transactions"
-            >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                <polyline points="14 2 14 8 20 8"/>
-                <line x1="16" y1="13" x2="8" y2="13"/>
-                <line x1="16" y1="17" x2="8" y2="17"/>
-              </svg>
-            </button>
-            <span className="system-lock" title="System account (read-only)">🔒</span>
-          </div>
+          <div className="node-actions"><span className="system-lock" title="System account (read-only)">🔒</span></div>
         )}
 
         {isRenaming && (
@@ -301,8 +269,7 @@ const AccountNode = ({ node, onRename, onDeactivate, onEditIdentifier, renamingI
             <AccountNode key={child.account_id} node={child}
               onRename={onRename} onDeactivate={onDeactivate} onEditIdentifier={onEditIdentifier}
               renamingId={renamingId} setRenamingId={setRenamingId}
-              renameValue={renameValue} setRenameValue={setRenameValue}
-              savingId={savingId} onViewTransactions={onViewTransactions} />
+              renameValue={renameValue} setRenameValue={setRenameValue} savingId={savingId} />
           ))}
         </div>
       )}
@@ -314,7 +281,6 @@ const AccountNode = ({ node, onRename, onDeactivate, onEditIdentifier, renamingI
 // Accounts Page
 // ─────────────────────────────────────────────────────────────────────────────
 const Accounts = () => {
-  const navigate = useNavigate();
   const [accounts, setAccounts] = useState([]);
   const [identifiers, setIdentifiers] = useState({});
   const [loading, setLoading] = useState(true);
@@ -413,23 +379,6 @@ const Accounts = () => {
     await fetchAccounts();
   };
 
-  // Navigate to Transactions page with correct filter pre-applied.
-  // An account is a "source" (bank/CC) if it has an account_identifier.
-  // For group accounts with no identifier, we check if any descendant has one.
-  const handleViewTransactions = (accountId) => {
-    const hasIdentifier = (id) => !!identifiers[id];
-    const hasDescendantIdentifier = (id) => {
-      if (hasIdentifier(id)) return true;
-      return accounts.some(a => a.parent_account_id === id && hasDescendantIdentifier(a.account_id));
-    };
-
-    if (hasDescendantIdentifier(accountId)) {
-      navigate('/transactions', { state: { srcAccId: accountId } });
-    } else {
-      navigate('/transactions', { state: { destAccId: accountId } });
-    }
-  };
-
   return (
     <div className="accounts-container">
       <div className="page-header">
@@ -480,8 +429,7 @@ const Accounts = () => {
                         onEditIdentifier={setIdentifierTarget}
                         renamingId={renamingId} setRenamingId={setRenamingId}
                         renameValue={renameValue} setRenameValue={setRenameValue}
-                        savingId={savingId}
-                        onViewTransactions={handleViewTransactions} />
+                        savingId={savingId} />
                     ))
                   )}
                 </div>

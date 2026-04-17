@@ -43,8 +43,8 @@ const AppLayout = ({ user, toggleTheme, isDarkMode }) => {
         <Settings onClose={() => setIsSettingsOpen(false)} />   // ← now reachable
       )}
 
-      {/* LedgerBuddy AI Assistant */}
-      {/* <LedgerBuddy user={user} isDarkMode={isDarkMode} /> */}
+      {/* LedgerBuddy AI Smart Insight Chatbot */}
+      <LedgerBuddy user={user} />
     </div>
   );
 };

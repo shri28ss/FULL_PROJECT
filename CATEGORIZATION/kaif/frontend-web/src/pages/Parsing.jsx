@@ -2,7 +2,7 @@ import { useEffect, useState, useRef } from "react";
 import { motion } from "framer-motion";
 import {
     FileUp, CheckCircle, Loader2, AlertCircle, Search, Cpu, List, Lock,
-    FileText, Clock, ChevronDown, Table as TableIcon, Trash2, RotateCcw, Code, Eye, EyeOff
+    FileText, Clock, ChevronDown, Table as TableIcon, Trash2, RotateCcw, Code
 } from "lucide-react";
 import API from "../api/api";
 import { useNavigate } from "react-router-dom";
@@ -69,20 +69,19 @@ function CircularProgress({ processingStatus, status, elapsedSeconds, parsedType
 
 export default function ParsingPage() {
     const navigate = useNavigate();
-    const { 
-        activeDoc, isExtracting, startExtraction, retryExtraction, clearActiveDoc, maxStepReached, latestFinishedDocId,
-        recentDocs, stats, isDashboardLoading: isLoading, refreshDashboardData 
-    } = useParsing();
+    const { activeDoc, isExtracting, startExtraction, retryExtraction, clearActiveDoc, maxStepReached } = useParsing();
 
     const [file, setFile] = useState(null);
     const [password, setPassword] = useState("");
-    const [showPassword, setShowPassword] = useState(false);
     const [needsPassword, setNeedsPassword] = useState(false);
     const [pdfType, setPdfType] = useState(null);
     const [status, setStatus] = useState("IDLE");
     const [error, setError] = useState("");
     const fileInputRef = useRef(null);
 
+    const [stats, setStats] = useState({ total: 0, parsed: 0, failed: 0, pending_review: 0 });
+    const [recentDocs, setRecentDocs] = useState([]);
+    const [isLoading, setIsLoading] = useState(true);
     const [sortOption, setSortOption] = useState("Newest first");
     const [isSortOpen, setIsSortOpen] = useState(false);
     const [deleteTarget, setDeleteTarget] = useState(null);
@@ -98,15 +97,30 @@ export default function ParsingPage() {
     const sortOptions = ["Newest first", "Oldest first", "Last activity", "Alphabetically"];
 
     useEffect(() => {
-        // Initial dashboard refresh only if needed (not forcing by default)
-        refreshDashboardData();
-    }, [refreshDashboardData]);
+        fetchData();
+    }, []);
 
     useEffect(() => {
-        if (latestFinishedDocId) {
-            refreshDashboardData(true); // force refresh on completion
+        if (!isExtracting && activeDoc?.status === "DONE") {
+            fetchData();
         }
-    }, [latestFinishedDocId, refreshDashboardData]);
+    }, [isExtracting, activeDoc]);
+
+    const fetchData = async () => {
+        setIsLoading(true);
+        try {
+            const [statsRes, recentRes] = await Promise.all([
+                API.get("/documents/stats"),
+                API.get("/documents/recent")
+            ]);
+            setStats(statsRes.data);
+            setRecentDocs(recentRes.data);
+        } catch (err) {
+            console.error("Failed to fetch dashboard data", err);
+        } finally {
+            setIsLoading(false);
+        }
+    };
 
     const handleRetryExtraction = async () => {
         if (!retryDoc) return;
@@ -118,8 +132,9 @@ export default function ParsingPage() {
             });
             
             retryExtraction(retryDoc.id, retryDoc.name);
+            
             setIsRetryModalOpen(false);
-            refreshDashboardData(true); // update lists
+            fetchData();
         } catch (err) {
             console.error(err);
             alert("Retry failed: " + (err.response?.data?.detail || err.message));
@@ -147,7 +162,9 @@ export default function ParsingPage() {
 
         try {
             await API.delete(`/documents/${id}`);
-            refreshDashboardData(true); // Sync global cache
+            setRecentDocs(prev => prev.filter(d => d.document_id !== id));
+            const statsRes = await API.get("/documents/stats");
+            setStats(statsRes.data);
             setDeleteTarget(null);
         } catch (err) {
             console.error("Delete failed", err);
@@ -180,7 +197,6 @@ export default function ParsingPage() {
         setError("");
         setPdfType(null);
         setNeedsPassword(false);
-        setShowPassword(false);
         setStatus("DETECTING");
 
         const formData = new FormData();
@@ -308,7 +324,7 @@ export default function ParsingPage() {
                                     <FileText size={24} style={{ color: 'var(--primary-action)' }} />
                                     <div style={{ maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '0.9rem', fontWeight: 700 }}>{file.name}</div>
                                     <button 
-                                        onClick={(e) => { e.stopPropagation(); setFile(null); setPassword(""); setShowPassword(false); setStatus("IDLE"); setError(""); }}
+                                        onClick={(e) => { e.stopPropagation(); setFile(null); setPassword(""); setStatus("IDLE"); setError(""); }}
                                         style={{ background: 'rgba(231, 76, 60, 0.1)', color: '#e74c3c', border: 'none', width: '24px', height: '24px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', transition: 'all 0.2s' }}
                                         title="Remove file"
                                     >
@@ -321,26 +337,7 @@ export default function ParsingPage() {
                         {needsPassword && (
                             <div style={{ marginTop: '1.5rem' }}>
                                 <label style={{ fontSize: '0.8rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}><Lock size={12} /> Password</label>
-                                <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-                                    <input type={showPassword ? "text" : "password"} value={password} onChange={(e) => setPassword(e.target.value)} style={{ width: '100%', padding: '0.75rem', paddingRight: '40px', background: 'var(--input-bg)', border: '1px solid var(--border-color)', borderRadius: '8px', boxSizing: 'border-box' }} />
-                                    <button
-                                        type="button"
-                                        onClick={() => setShowPassword(!showPassword)}
-                                        style={{
-                                            position: 'absolute',
-                                            right: '12px',
-                                            background: 'none',
-                                            border: 'none',
-                                            color: 'var(--text-secondary)',
-                                            cursor: 'pointer',
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            padding: 0
-                                        }}
-                                    >
-                                        {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                                    </button>
-                                </div>
+                                <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} style={{ width: '100%', padding: '0.75rem', background: 'var(--input-bg)', border: '1px solid var(--border-color)', borderRadius: '8px', boxSizing: 'border-box' }} />
                             </div>
                         )}
 
@@ -385,12 +382,9 @@ export default function ParsingPage() {
                   { label: "Failed", val: stats.failed, icon: AlertCircle, col: "#e74c3c", bg: "rgba(231, 76, 60, 0.1)" },
                   { label: "Pending Approval", val: stats.pending_review, icon: Clock, col: "#f39c12", bg: "rgba(243, 156, 18, 0.1)" }
                 ].map((s, i) => (
-                    <div key={i} style={{ background: 'var(--bg-secondary)', borderRadius: '16px', padding: '1.25rem', border: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '1rem', opacity: isLoading ? 0.6 : 1, transition: 'opacity 0.2s' }}>
+                    <div key={i} style={{ background: 'var(--bg-secondary)', borderRadius: '16px', padding: '1.25rem', border: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '1rem' }}>
                         <div style={{ padding: '0.6rem', borderRadius: '10px', background: s.bg, color: s.col }}><s.icon size={20} /></div>
-                        <div>
-                            <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', fontWeight: 600 }}>{s.label}</div>
-                            <div style={{ fontSize: '1.25rem', fontWeight: 800 }}>{isLoading ? '...' : s.val}</div>
-                        </div>
+                        <div><div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', fontWeight: 600 }}>{s.label}</div><div style={{ fontSize: '1.25rem', fontWeight: 800 }}>{s.val}</div></div>
                     </div>
                 ))}
             </div>
@@ -444,9 +438,7 @@ export default function ParsingPage() {
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                     <thead><tr style={{ background: 'var(--bg-primary)', fontSize: '0.75rem', color: 'var(--text-secondary)' }}><th style={{ padding: '1rem 2rem', textAlign: 'left' }}>File Name</th><th style={{ padding: '1rem' }}>Status</th><th style={{ padding: '1rem' }}>Type</th><th style={{ padding: '1rem' }}>Activity</th><th style={{ padding: '1rem 2rem' }}>Actions</th></tr></thead>
                     <tbody>
-                        {(isLoading && recentDocs.length === 0) ? (
-                            <tr><td colSpan="5" style={{ textAlign: 'center', padding: '3rem' }}><Loader2 className="spin-icon" size={24} color="var(--primary-action)" /><div style={{ marginTop: '10px', fontSize: '0.8rem', opacity: 0.6 }}>Loading documents...</div></td></tr>
-                        ) : sortedDocs.map(doc => (
+                        {isLoading ? <tr><td colSpan="5" style={{ textAlign: 'center', padding: '2rem' }}><Loader2 className="spin-icon" size={24} color="#483EA8" /></td></tr> : sortedDocs.map(doc => (
                             <tr key={doc.document_id} style={{ borderTop: '1px solid var(--border-color)', fontSize: '0.9rem' }}>
                                 <td style={{ padding: '1rem 2rem' }}><div><b>{doc.file_name}</b></div><div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{doc.institution_name || 'Generic PDF'}</div></td>
                                 <td style={{ textAlign: 'center' }}>

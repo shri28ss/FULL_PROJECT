@@ -3,32 +3,46 @@ services/llm_parser.py
 ──────────────────────
 STEP 4 METHOD 2 — Direct LLM transaction extraction.
 
-Uses call_llm() which tries Gemini direct → Gemini via OpenRouter →
-fallback model, so a single provider being overloaded never stalls the pipeline.
+Uses Gemini (same key as identifier_service) with page-wise chunking.
+
+Why chunking:
+  - Sending the full document in one call risks response truncation mid-JSON
+    on large statements, causing extract_json_from_response to return [].
+  - Gemini 2.5 Flash supports up to 65k output tokens so truncation per-chunk
+    is extremely unlikely even for dense statements.
 """
 
 import re
 import json
 import logging
 
+from google import genai
 from google.genai import types
-from config import LLM_PARSER_MODEL
-from services.llm_provider import call_llm   # ← replaces direct Gemini calls
+from config import GEMINI_API_KEY, LLM_PARSER_MODEL
+from services.llm_retry import call_with_retry
 
+client = genai.Client(api_key=GEMINI_API_KEY)
 logger = logging.getLogger("ledgerai.llm_parser")
 
+# Pages per Gemini call. 10 pages ≈ 3000–5000 input tokens — well within limits.
+# Gemini handles the output side fine (65k token output limit).
 _CHUNK_SIZE = 10
 
 
 def parse_with_llm(full_text: str, identifier_json: dict) -> str:
     """
-    Split full_text into page chunks, extract transactions per chunk,
+    Split full_text into page chunks, extract transactions per chunk via Gemini,
     merge all results and return as a JSON array string.
+
+    Caller contract is unchanged: returns a raw string that
+    extract_json_from_response(response) can parse into a list.
     """
     doc_family  = identifier_json.get("document_family", "BANK_ACCOUNT_STATEMENT")
     doc_subtype = identifier_json.get("document_subtype", "")
     institution = identifier_json.get("institution_name", "Unknown")
 
+    # ── Split full_text into per-page blocks ──────────────────────────────────
+    # Uses the same ={80} page separator that processing_engine produces.
     pages = [
         block.strip()
         for block in re.split(r'={80}', full_text)
@@ -43,6 +57,7 @@ def parse_with_llm(full_text: str, identifier_json: dict) -> str:
         doc_family, institution, total_pages, _CHUNK_SIZE,
     )
 
+    # ── Process in chunks ─────────────────────────────────────────────────────
     all_txns = []
 
     for chunk_start in range(0, total_pages, _CHUNK_SIZE):
@@ -79,13 +94,15 @@ def parse_with_llm(full_text: str, identifier_json: dict) -> str:
         len(all_txns), total_pages,
     )
 
+    # Return as JSON string — caller (processing_engine) passes this to
+    # extract_json_from_response which expects a string, not a list.
     return json.dumps(all_txns)
 
 
 def parse_with_vision(pdf_bytes: bytes, identifier_json: dict, note: str = None) -> str:
     """
-    Extract transactions using multimodal vision by sending PDF bytes.
-    Falls back to text-only OpenRouter models if Gemini is unavailable.
+    Extract transactions directly using Gemini Vision (multimodal) by sending
+     the PDF bytes. Good for scanned or image-heavy PDFs.
     """
     doc_family  = identifier_json.get("document_family", "BANK_ACCOUNT_STATEMENT")
     doc_subtype = identifier_json.get("document_subtype", "")
@@ -135,16 +152,20 @@ Return ONLY the JSON array. No markdown. No explanation.
 """
 
     logger.info("Vision extraction starting for %s (note=%s)", institution, "YES" if note else "NO")
-
-    parts = [
-        types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf"),
-        prompt,
-    ]
-
-    # call_llm handles fallback — if Gemini is down, OpenRouter text models
-    # won't have the PDF bytes but the exception from call_llm will be raised
-    # clearly so the caller can decide whether to retry or surface the error.
-    return call_llm(parts=parts, temperature=0)
+    
+    try:
+        response = call_with_retry(
+            client, LLM_PARSER_MODEL, 
+            [
+                types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf"),
+                prompt
+            ],
+            config={"temperature": 0}
+        )
+        return response.text.strip()
+    except Exception as e:
+        logger.error("Vision extraction failed: %s", e)
+        raise
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -157,6 +178,10 @@ def _parse_chunk(
     doc_subtype: str,
     institution: str,
 ) -> str:
+    """
+    Send a single page chunk to Gemini and return the raw response text.
+    Uses call_with_retry (same as identifier_service) for resilience.
+    """
     prompt = f"""
 You are a financial data extraction engine.
 
@@ -217,10 +242,18 @@ DOCUMENT TEXT
 Return ONLY the JSON array. No markdown. No explanation.
 """
 
-    return call_llm(prompt=prompt, temperature=0)
+    response = call_with_retry(
+        client, LLM_PARSER_MODEL, prompt,
+        config={"temperature": 0},
+    )
+    return response.text.strip()
 
 
 def _safe_parse_json(response: str, page_from: int, page_to: int) -> list:
+    """
+    Parse a JSON array out of the raw Gemini response for a chunk.
+    Returns [] on any failure — never raises.
+    """
     cleaned = response.replace("```json", "").replace("```", "").strip()
     match = re.search(r"\[.*\]", cleaned, re.DOTALL)
     if match:
