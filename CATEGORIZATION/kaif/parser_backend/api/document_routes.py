@@ -276,11 +276,10 @@ async def upload_and_process(
         .eq("user_id", user_id)
         .eq("file_name", file.filename)
         .eq("is_active", True)
-        .maybe_single()
         .execute()
     )
-    if existing_doc.data:
-        logger.warning("DUPLICATE UPLOAD: File '%s' already exists (doc %s)", file.filename, existing_doc.data["document_id"])
+    if existing_doc and existing_doc.data and len(existing_doc.data) > 0:
+        logger.warning("DUPLICATE UPLOAD: File '%s' already exists (doc %s)", file.filename, existing_doc.data[0]["document_id"])
 
     is_pw = bool(password)
 
