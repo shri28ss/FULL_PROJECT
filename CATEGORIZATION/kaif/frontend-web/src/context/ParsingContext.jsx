@@ -205,6 +205,7 @@ export const ParsingProvider = ({ children }) => {
         recentDocs,
         stats,
         isDashboardLoading,
+        // refreshDashboardData
         refreshDashboardData
     ]);
 

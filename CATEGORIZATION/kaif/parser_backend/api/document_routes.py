@@ -893,7 +893,6 @@ async def download_transactions_json(document_id: int, user=Depends(get_current_
             "transactions": result_json,
         },
         headers={
-            # "Content-Disposition": f'attachment; filename="{safe_name}_transactions.json"'
-            "Content-Disposition": f'attachement; filename="{safe_name}_transactions.json"'
+            "Content-Disposition": f'attachment; filename="{safe_name}_transactions.json"'
         }
     )
