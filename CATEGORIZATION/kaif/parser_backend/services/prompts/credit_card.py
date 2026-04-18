@@ -32,36 +32,29 @@ Extract all transactions (date + description + amount).
 Skip: headers, footers, summaries, offers, T&C text, page numbers, noise.
 
 STEPS:
-1. Find transaction lines (date + description + amount) using PATTERN MATCHING
-2. Handle multi-line: merge continuation lines without dates CAREFULLY (only if clearly a continuation)
-   - DO NOT merge noise lines (page numbers, headers, footers, random text)
-   - Use patterns to identify valid continuations, not exact strings
-3. Extract details AS-IS:
-   - Keep ALL prefixes (UPI-, IMPS-, etc.)
-   - Keep reference numbers and transaction IDs
-   - Preserve raw text exactly as it appears
-   - Do NOT clean, strip, or modify the details string
-4. Classify debit vs credit:
-   - Credit (money in): PAYMENT, REFUND, CREDIT, REVERSAL, WAIVER, CASHBACK
-   - Debit (money out): all purchases, fees, charges, interest
-   - For credit cards: most transactions are debits (charges), payments are credits
+1. **Identify Boundary**: Use 'exclusion_markers' if provided in context to find where the transaction table ends.
+2. **Find Rows**: Identify lines with a date pattern.
+3. **The Anchor Strategy (CRITICAL)**:
+   - In many Credit Card PDFs, the last number on a line is the 'Closing Balance'.
+   - The second-to-last number is usually the 'Transaction Amount'.
+   - Use this positional 'Anchor' logic to correctly extract the amount and AVOID sidebar noise like 'Total Outstanding' or 'Statement Date'.
+4. **Handle multi-line**: merge continuation lines without dates CAREFULLY.
+5. **Extract details AS-IS**: Keep reference IDs, merchant names, and prefixes. Do NOT strip anything.
+6. **Classify debit vs credit**:
+   - Credit (money in): PAYMENT, REFUND, CREDIT, REVERSAL, WAIVER, CASHBACK, or 'CR' suffix.
+   - Debit (money out): all purchases, fees, charges, interest, or 'DR' suffix.
+   - Most credit card transactions are charges (debits); payments to the card are credits.
 
 OUTPUT:
-[{{"date": "YYYY-MM-DD", "details": str, "debit": float|None, "credit": float|None, "balance": None, "confidence": float}}]
+[{{"date": "YYYY-MM-DD", "details": str, "debit": float|None, "credit": float|None, "balance": float|None, "confidence": float}}]
 
 RULES:
-- Write GENERIC code using patterns (regex, keywords), NOT hardcoded strings
-- Exactly one of debit/credit per transaction (never both, never neither)
-- Normalize dates to YYYY-MM-DD format
-- Deduplicate on (date, details, debit, credit)
-- Filter out lines that don't match transaction patterns (no date or no amount = not a transaction)
-- Skip noise: page numbers, promotional text, terms & conditions, headers, footers
-- Confidence: 0.95 normal, 0.85 if debit/credit unclear, 0.70 uncertain
-- Raw Python only, no markdown
-- Only use built-in types (dict, list, str, float, int, bool, None)
-- Do NOT import typing, Optional, List, Dict - use lowercase dict, list instead
-- Available imports: re, datetime, date, timedelta (already imported, just use them)
-- Only import re if needed for regex operations
+- **PURSUE SIMPLICITY**: Use simple Python loops and string methods over complex, single-group regex.
+- **NO HARDCODING**: Write generic code that handles repeating patterns.
+- **EXACTLY ONE SIDE**: Every transaction must have exactly one of debit or credit.
+- **SKIP NOISE**: Use your logic to ignore headers, footers, and sidebar boxes.
+- **CONFIDENCE**: 0.95 for perfect pattern match.
 
-Write the function now.
+Available imports: re, datetime, json.
+Return ONLY the Python function.
 """

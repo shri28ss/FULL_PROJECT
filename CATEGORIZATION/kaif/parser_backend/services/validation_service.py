@@ -408,12 +408,17 @@ def validate_transactions(code_txns: list, llm_txns: list) -> dict:
     balance_accuracy     = (balance_matches     / total) * 100
     description_accuracy = (sum(description_scores) / total) * 100
 
-    # Weighted final score (used for CODE→ACTIVE threshold in processing_engine)
+    # ── ACCURACY RATIO (Total Expected vs Matches) ──
+    # If LLM found 13 and Code found 5, count_accuracy is 38%.
+    count_accuracy = (total / len(llm_txns)) * 100
+    
+    # Weighted final score
+    # We now factor in the count_accuracy to punish missing rows
     overall_accuracy = (
-        (date_accuracy        * 0.30)
+          (date_accuracy        * 0.20)
         + (amount_accuracy    * 0.30)
-        + (balance_accuracy   * 0.25)
-        + (description_accuracy * 0.15)
+        + (description_accuracy * 0.20)
+        + (count_accuracy       * 0.30)  # High penalty for missing rows
     )
 
     return {

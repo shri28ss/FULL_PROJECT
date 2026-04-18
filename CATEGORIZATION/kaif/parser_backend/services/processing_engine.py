@@ -11,6 +11,8 @@ from services.identifier_service import (
 )
 from services.extraction_service import (
     generate_extraction_logic_llm,
+    generate_vetted_extraction_logic,
+    vet_and_repair_existing_logic,
     extract_transactions_using_logic,
     refine_extraction_logic_llm,
 )
@@ -232,20 +234,35 @@ def process_document(document_id: int, override_file_path: str = None, retry_mod
                     update_statement_status(statement_id, "UNDER_REVIEW")
                     # Fall through to dual pipeline below
 
-            # ── CASE A2 — UNDER_REVIEW / EXPERIMENTAL → Fall through to dual pipeline ──
-            logger.info("Format status is %s — continuing to dual pipeline...", statement_status)
+            # ── CASE A2 — UNDER_REVIEW / EXPERIMENTAL ──
+            logger.info("Format status is %s — running vetting gate...", statement_status)
+            
+            first_page_text = pages[0] if pages else full_text
+            extraction_code = vet_and_repair_existing_logic(
+                statement_id    = statement_id,
+                stored_code     = extraction_code,
+                identifier_json = identity_json,
+                first_page_text = first_page_text,
+                text_sample     = sample_text
+            )
+            logger.info("Vetting gate complete — continuing to dual pipeline...")
 
         # ═══════════════════════════════════════════════════
         # CASE B — NEW FORMAT → GENERATE EXTRACTION CODE + SAVE
         # ═══════════════════════════════════════════════════
         else:
             logger.info("")
-            logger.info("[STEP 3c/5] Generating extraction code via LLM...")
-            extraction_code = generate_extraction_logic_llm(
+            logger.info("[STEP 3c/5] Generating VETTED extraction code via LLM loop...")
+            
+            # Use Page 1 for vetted generation
+            first_page_text = pages[0] if pages else full_text
+            
+            extraction_code = generate_vetted_extraction_logic(
                 identifier_json=identity_json,
+                first_page_text=first_page_text,
                 text_sample=sample_text,
             )
-            logger.info("Extraction code generated (%d chars)", len(extraction_code))
+            logger.info("Vetted extraction code finalized (%d chars)", len(extraction_code))
 
             logger.info("")
             logger.info("[STEP 3d/5] Saving new format to database...")
@@ -411,11 +428,17 @@ def process_document(document_id: int, override_file_path: str = None, retry_mod
             logger.info("Format status → EXPERIMENTAL")
 
         # ── CASE 1: Both extracted — score-based decision ─────────────────────
-        elif comparison_score >= 90 and code_passes_quality:
+        # Promotion to ACTIVE requires high accuracy AND a MATCHING count
+        elif comparison_score >= 90 and code_passes_quality and len(code_txns) == len(llm_txns):
             final_parser_type    = "CODE"
-            new_statement_status = "ACTIVE"
-            logger.info("DECISION: CODE WINS (accuracy=%.2f%% ≥ 90%% & both quality gates pass)", comparison_score)
-            logger.info("Format status → ACTIVE")
+            
+            # FAST-TRACK: If it's a perfect 100% match, go straight to ACTIVE
+            if comparison_score == 100:
+                new_statement_status = "ACTIVE"
+                logger.info("DECISION: CODE WINS (PERFECT 100%% match + count match) -> Promoting to ACTIVE")
+            else:
+                new_statement_status = "ACTIVE" # Also promoting 90%+ with matching count
+                logger.info("DECISION: CODE WINS (accuracy=%.2f%% ≥ 90%% + count match) -> Promoting to ACTIVE", comparison_score)
 
         else:
             final_parser_type    = "LLM"
@@ -426,8 +449,34 @@ def process_document(document_id: int, override_file_path: str = None, retry_mod
                 reason = "code strict quality gate failed"
             else:
                 reason = f"code accuracy {comparison_score:.2f}% < 90%"
+            
             logger.info("DECISION: LLM WINS (%s)", reason)
             logger.info("Format status → EXPERIMENTAL")
+
+            # ── AUTO-REPAIR FOR UNDER_REVIEW FORMATS ──────────────────────────
+            # If the code failed but the LLM succeeded, use the LLM data
+            # to internally fix the code for the next user.
+            if has_llm and statement_status == "UNDER_REVIEW":
+                try:
+                    logger.info("AUTO-REPAIR: Triggering background fix for experimental format...")
+                    repair_feedback = f"""
+Auto-repair triggered. The stored parser script failed to match the LLM Ground Truth.
+- Ground Truth Count: {len(llm_txns)}
+- Code Parser Count: {len(code_txns)}
+
+Please use these ground truth samples to fix the regex/logic:
+{json.dumps(llm_txns[:5], indent=2)}
+"""
+                    fixed_logic = refine_extraction_logic_llm(
+                        current_logic = extraction_code,
+                        user_feedback = repair_feedback,
+                        text_sample   = sample_text
+                    )
+                    if fixed_logic:
+                        logger.info("AUTO-REPAIR: Script improved and updated in DB.")
+                        update_extraction_logic(statement_id, fixed_logic)
+                except Exception as ef:
+                    logger.warning("AUTO-REPAIR: Background fix failed: %s", ef)
 
         # Persist DB state
         update_statement_status(statement_id, new_statement_status)

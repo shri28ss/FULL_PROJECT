@@ -53,8 +53,9 @@ const LLM_ONLY_PATTERNS = [
 const STATISTICAL_SIGNALS = [
   /(?:my|i|i've|my\s+account|my\s+bank|my\s+spending|my\s+expense|my\s+income|my\s+saving|my\s+balance|my\s+transaction)/i,
   /(?:how\s+much|how\s+many|what\s+(?:is|was|were|are|did))\s+(?:i|my)/i,
-  /(?:show|tell|give|fetch|get|display)\s+(?:me\s+)?(?:my|the|all|a|an)/i,
-  /(?:last|this|past|previous)\s+(?:month|year|week|quarter|30\s*days|7\s*days|90\s*days|6\s*months)/i,
+  /(?:summary|report|overview|trend|breakdown|history|log|stat|stats|statistical)\b/i,
+  /(?:last|this|past|previous|monthly|yearly|annual|weekly|quarterly|monthly\s+summary|yearly\s+summary)\b/i,
+  /(?:last|this|past|previous|monthly|yearly|annual|weekly|quarterly)\s+(?:month|year|week|quarter|30\s*days|7\s*days|90\s*days|6\s*months|summary|report|overview)/i,
   /(?:january|february|march|april|may|june|july|august|september|october|november|december)\s*\d{4}/i,
   /\b20\d{2}\b/,
   /(?:biggest|largest|smallest|lowest|highest|maximum|minimum|average|avg|mean|top|most)\s+(?:transaction|expense|income|spend|category|payment|transfer|debit|credit)/i,
@@ -96,6 +97,7 @@ function classifyQuery(query) {
 
   for (const pattern of OUT_OF_SCOPE_PATTERNS) {
     if (pattern.test(trimmed)) {
+      console.log(`[Chatbot] Router: OUT_OF_SCOPE -> "${trimmed}"`);
       logger.info('InsightRouter → OUT_OF_SCOPE', { query: trimmed.slice(0, 60) });
       return { lane: 'OUT_OF_SCOPE', confidence: 1.0 };
     }
@@ -104,6 +106,7 @@ function classifyQuery(query) {
   // 1. Check LLM-only patterns first — these MUST go to LLM
   for (const pattern of LLM_ONLY_PATTERNS) {
     if (pattern.test(trimmed)) {
+      console.log(`[Chatbot] Router: LLM_REALTIME -> "${trimmed}"`);
       logger.info('InsightRouter → LLM_REALTIME', { query: trimmed.slice(0, 60) });
       return { lane: 'LLM_REALTIME', confidence: 0.9, matchedPattern: pattern.toString() };
     }
@@ -112,6 +115,7 @@ function classifyQuery(query) {
   // 2. Check explicit statistical signals
   for (const pattern of STATISTICAL_SIGNALS) {
     if (pattern.test(trimmed)) {
+      console.log(`[Chatbot] Router: STATISTICAL (Signal) -> "${trimmed}"`);
       logger.info('InsightRouter → STATISTICAL (signal match)', { query: trimmed.slice(0, 60) });
       return { lane: 'STATISTICAL', confidence: 0.9, matchedPattern: pattern.toString() };
     }
@@ -124,7 +128,7 @@ function classifyQuery(query) {
   }
 
   // 4. Default: if it contains ANY finance-related word → STATISTICAL
-  const hasFinanceWord = /(?:account|bank|finance|money|budget|spend|expense|income|save|salary|market|transaction|credit|debit|loan|emi|payment|transfer|amount|rupee|₹|balance|category|earning|saving|asset|liability|profit|loss|inflow|outflow|worth|net|total|bill|invoice|ledger)/i.test(trimmed);
+  const hasFinanceWord = /(?:account|bank|finance|money|budget|spend|expense|income|save|salary|market|transaction|credit|debit|loan|emi|payment|transfer|amount|rupee|₹|balance|category|earning|saving|asset|liability|profit|loss|inflow|outflow|worth|net|total|bill|invoice|ledger|summary|report|overview|monthly|annual|yearly|quarterly)/i.test(trimmed);
 
   if (hasFinanceWord) {
     logger.info('InsightRouter → STATISTICAL (finance word default)', { query: trimmed.slice(0, 60) });
