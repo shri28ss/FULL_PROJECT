@@ -6,9 +6,8 @@ npm run dev
 B. ML Microservice (Python)
 cd CATEGORIZATION/kaif/ml-service
 python3 -m venv .venv
-source .venv/bin/activate  # Linux/macOS specific
+source .venv/bin/activate
 pip install -r requirements.txt
-python3 -m spacy download en_core_web_sm
 python3 main.py
 
 C. Parser Backend (Python)
