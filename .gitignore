@@ -1,22 +1,28 @@
-# Environments
 .env
 .env.*
 !.env.example
 
-# Node
 node_modules/
 npm-debug.log
 yarn-error.log
 
-# Python
 __pycache__/
 *.py[cod]
 *$py.class
 venv/
+.venv/
 .env/
 env/
 ENV/
 
-# OS generated files
+dist/
+build/
+.expo/
+/extraStuff/
+
+*.log
+
 .DS_Store
 Thumbs.db
+.vscode/
+.ledgerai_pids
