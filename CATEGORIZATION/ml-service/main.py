@@ -7,7 +7,8 @@ from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 from sentence_transformers import SentenceTransformer
 import uvicorn
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from dotenv import load_dotenv
 
 from app_logger import get_logger
@@ -15,14 +16,14 @@ from app_logger import get_logger
 load_dotenv()
 logger = get_logger("ml-service")
 
-# Configure Gemini
 api_key = os.getenv("GEMINI_API_KEY")
-model_name = os.getenv("CLASSIFIER_MODEL", "models/gemini-2.5-flash")
+model_name = os.getenv("CLASSIFIER_MODEL", "gemini-2.5-flash")  # note: no "models/" prefix in new SDK
 
 if api_key:
-    genai.configure(api_key=api_key)
+    client = genai.Client(api_key=api_key)
     logger.info(f"Gemini configured with model: {model_name}")
 else:
+    client = None
     logger.warning("GEMINI_API_KEY not found in environment")
 
 @asynccontextmanager
@@ -54,7 +55,6 @@ class ChatSummarizeRequest(BaseModel):
 async def get_embed(payload: TextRequest, request: Request):
     logger.debug(f"Embedding request received: {payload.text[:100]}")
     embedder = request.app.state.embedder
-
     try:
         embedding_vector = embedder.encode(payload.text)
         embedding_list = [float(val) for val in embedding_vector.tolist()]
@@ -65,9 +65,9 @@ async def get_embed(payload: TextRequest, request: Request):
 
 @app.post("/chat/intent")
 async def get_intent(payload: ChatIntentRequest):
-    if not api_key:
+    if not client:
         raise HTTPException(status_code=500, detail="Gemini API not configured")
-    
+
     prompt = f"""
     You are a financial intent classifier for LedgerBuddy.
     Analyze the user's query and categorize it into one of these intents:
@@ -86,31 +86,28 @@ async def get_intent(payload: ChatIntentRequest):
         "params": {{ "timeframe": "relative_time", "category": "optional", "topic": "optional" }}
     }}
     """
-    
+
     try:
-        model = genai.GenerativeModel(model_name)
-        response = model.generate_content(prompt)
-        
-        # Extract JSON from response
+        response = client.models.generate_content(
+            model=model_name,
+            contents=prompt
+        )
         raw_text = response.text.strip()
         if "```json" in raw_text:
             raw_text = raw_text.split("```json")[1].split("```")[0].strip()
         elif "```" in raw_text:
             raw_text = raw_text.split("```")[1].split("```")[0].strip()
-            
-        intent_data = json.loads(raw_text)
-        return intent_data
+        return json.loads(raw_text)
     except Exception as e:
         logger.error(f"Intent classification failed: {str(e)}")
         return {"intent": "GENERAL", "params": {}}
 
 @app.post("/chat/summarize")
 async def summarize_context(payload: ChatSummarizeRequest):
-    if not api_key:
+    if not client:
         raise HTTPException(status_code=500, detail="Gemini API not configured")
 
-    system_prompt = f"""
-You are "LedgerBuddy", an expert AI financial assistant for an Indian expense tracking and banking platform called LedgerAI.
+    system_prompt = f"""You are "LedgerBuddy", an expert AI financial assistant for an Indian expense tracking and banking platform called LedgerAI.
 
 User Data Context (Financial Summary):
 {payload.context_data}
@@ -119,20 +116,17 @@ Behavioral Rules:
 1. ALWAYS use the "₹" symbol for money. Never use "$" or "USD".
 2. Use the Indian numbering system (e.g., 1,00,000 for 1 Lakh) where appropriate.
 3. If the user asks a financial question, use ONLY the numbers in the JSON context provided above.
-4. If data is missing (e.g., category-specific details not yet extracted), say: "I don't have category-level details yet, but I can see your total spending is ₹..."
-5. For platform questions (How to parse, how to navigate), refer users to:
-   - "Parsing": To upload bank statements (PDFs).
-   - "Transactions": to view already categorized expenses.
-   - "Review": to finalize AI extractions.
+4. If data is missing, say: "I don't have category-level details yet, but I can see your total spending is ₹..."
+5. For platform questions, refer users to Parsing, Transactions, or Review pages.
 6. Responses must be very concise (2-4 sentences max) and helpful.
 7. Do not give legal or official investment advice.
 """
-    
+
     try:
-        model = genai.GenerativeModel(model_name)
-        chat = model.start_chat()
-        response = chat.send_message(f"Instruction: {system_prompt}\nUser Question: {payload.user_query}")
-        
+        response = client.models.generate_content(
+            model=model_name,
+            contents=f"Instruction: {system_prompt}\nUser Question: {payload.user_query}"
+        )
         return {"text": response.text}
     except Exception as e:
         logger.error(f"Narrative generation failed: {str(e)}")
@@ -145,4 +139,4 @@ async def health():
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "5000"))
     logger.info(f"Starting ML service on port {port}")
-    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
