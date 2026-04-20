@@ -26,3 +26,5 @@ build/
 Thumbs.db
 .vscode/
 .ledgerai_pids
+
+.claude/
